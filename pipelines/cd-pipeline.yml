@@ -1,0 +1,46 @@
+trigger: none
+
+stages:
+- stage: Deploy_Staging
+  displayName: "Deploy to Staging Slot"
+  jobs:
+  - deployment: DeployStaging
+    displayName: "Deploy app.zip to staging"
+    environment: devopspy-staging
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: drop
+
+          - task: AzureWebApp@1
+            displayName: "Deploy to App Service (staging slot)"
+            inputs:
+              azureSubscription: "sc-devopspy-dev"
+              appType: "webAppLinux"
+              appName: "$(WEB_APP_NAME)"
+              resourceGroupName: "rg-devopspy-dev"
+              slotName: "staging"
+              package: "$(Pipeline.Workspace)/drop/app.zip"
+
+- stage: Swap_To_Prod
+  displayName: "Swap Staging to Production"
+  dependsOn: Deploy_Staging
+  condition: succeeded()
+  jobs:
+  - deployment: SwapSlots
+    displayName: "Swap staging -> production"
+    environment: devopspy-prod
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureAppServiceManage@0
+            displayName: "Swap slots"
+            inputs:
+              azureSubscription: "sc-devopspy-dev"
+              WebAppName: "$(WEB_APP_NAME)"
+              ResourceGroupName: "rg-devopspy-dev"
+              SourceSlot: "staging"
+              Action: "Swap Slots"
