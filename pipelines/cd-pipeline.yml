@@ -6,6 +6,8 @@ stages:
   jobs:
   - deployment: DeployStaging
     displayName: "Deploy app.zip to staging"
+    pool:
+      name: self-hosted-dev
     environment: devopspy-staging
     strategy:
       runOnce:
@@ -31,6 +33,8 @@ stages:
   jobs:
   - deployment: SwapSlots
     displayName: "Swap staging -> production"
+    pool:
+      name: self-hosted-dev
     environment: devopspy-prod
     strategy:
       runOnce:

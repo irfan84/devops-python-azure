@@ -5,7 +5,7 @@ pr:
 - main
 
 pool:
-  vmImage: ubuntu-latest
+  vmImage: self-hosted-dev
 
 steps:
 - task: UsePythonVersion@0
