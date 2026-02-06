@@ -7,3 +7,6 @@
 # Python venv
 .venv/
 __pycache__/
+
+# Terraform backend config
+terraform/main/backend.hcl
