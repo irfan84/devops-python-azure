@@ -1,13 +1,13 @@
-output "resource_group" {
-  value = azurerm_resource_group.app.name
+output "staging_url" {
+  value = "${azurerm_linux_web_app.app.name}-staging.azurewebsites.net"
 }
 
-output "web_app_name" {
-  value = azurerm_linux_web_app.app.name
+output "app_insights_name" {
+  value = azurerm_application_insights.ai.name
 }
 
-output "web_app_url" {
-  value = azurerm_linux_web_app.app.default_hostname
+output "log_analytics_workspace" {
+  value = azurerm_log_analytics_workspace.law.name
 }
 
 output "key_vault_name" {

@@ -1,15 +1,19 @@
-from flask import Flask
 import os
+from azure.monitor.opentelemetry import configure_azure_monitor
+from flask import Flask
+
+# Automatically reads APPLICATIONINSIGHTS_CONNECTION_STRING
+configure_azure_monitor()
 
 app = Flask(__name__)
 
 @app.get("/")
 def home():
-    return "OK", 200
+    return "DevOps Python Azure App is running!", 200
 
 @app.get("/health")
 def health():
-    return "Healthy", 200
+    return {"status": "healthy"}, 200
 
 @app.get("/secret")
 def secret():
