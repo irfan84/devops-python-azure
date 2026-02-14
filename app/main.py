@@ -1,11 +1,14 @@
 import os
-from azure.monitor.opentelemetry import configure_azure_monitor
 from flask import Flask
 
-# Automatically reads APPLICATIONINSIGHTS_CONNECTION_STRING
-configure_azure_monitor()
-
 app = Flask(__name__)
+
+try:
+    from azure.monitor.opentelemetry import configure_azure_monitor
+    configure_azure_monitor()
+except Exception as e:
+    # Telemetry should never crash the app/tests
+    print(f"Telemetry init skipped: {e}")
 
 @app.get("/")
 def home():
