@@ -1,6 +1,12 @@
 trigger: none
 pr: none
 
+resources:
+  pipelines:
+  - pipeline: ci
+    source: devopspy-ci
+    trigger: none
+
 stages:
 - stage: Deploy_Staging
   displayName: "Deploy to Staging Slot"
@@ -14,7 +20,7 @@ stages:
       runOnce:
         deploy:
           steps:
-          - download: current
+          - download: ci
             artifact: drop
 
           - task: AzureWebApp@1
@@ -25,7 +31,7 @@ stages:
               appName: "$(WEB_APP_NAME)"
               resourceGroupName: "rg-devopspy-dev"
               slotName: "staging"
-              package: "$(Pipeline.Workspace)/drop/app.zip"
+              package: "$(Pipeline.Workspace)/ci/drop/app.zip"
 
 - stage: Swap_To_Prod
   displayName: "Swap Staging to Production"
