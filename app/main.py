@@ -1,15 +1,22 @@
-from flask import Flask
 import os
+from flask import Flask
 
 app = Flask(__name__)
 
+try:
+    from azure.monitor.opentelemetry import configure_azure_monitor
+    configure_azure_monitor()
+except Exception as e:
+    # Telemetry should never crash the app/tests
+    print(f"Telemetry init skipped: {e}")
+
 @app.get("/")
 def home():
-    return "OK", 200
+    return "DevOps Python Azure App is running!", 200
 
 @app.get("/health")
 def health():
-    return "Healthy", 200
+    return {"status": "healthy"}, 200
 
 @app.get("/secret")
 def secret():
