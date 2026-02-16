@@ -13,6 +13,8 @@ resource "random_string" "suffix" {
   special = false
 }
 
+# checkov:skip=CKV2_AZURE_1: CMK encryption skipped for demo bootstrap state
+# checkov:skip=CKV2_AZURE_21: Blob logging not required for Terraform state in portfolio environment
 resource "azurerm_storage_account" "tfstate" {
   name                            = "tfstate${var.project}${random_string.suffix.result}"
   resource_group_name             = azurerm_resource_group.tfstate.name
