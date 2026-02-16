@@ -26,6 +26,8 @@ resource "random_string" "suffix" {
 # --------------------
 # App Service Plan
 # --------------------
+# checkov:skip=CKV_AZURE_212: Minimum instances skipped for cost efficiency
+# checkov:skip=CKV_AZURE_225: Zone redundancy skipped for cost efficiency
 resource "azurerm_service_plan" "plan" {
   name                = "asp-${local.name}"
   location            = azurerm_resource_group.app.location
@@ -59,6 +61,11 @@ resource "azurerm_application_insights" "ai" {
 # --------------------
 # Linux Web App (Production)
 # --------------------
+# checkov:skip=CKV_AZURE_13: App Service authentication not required for demo
+# checkov:skip=CKV_AZURE_17: Client certificates not required for demo
+# checkov:skip=CKV_AZURE_18: HTTP version policy not enforced for demo
+# checkov:skip=CKV_AZURE_222: Public network access required for public web app
+# checkov:skip=CKV_AZURE_88: Azure Files not required for this workload
 resource "azurerm_linux_web_app" "app" {
   name                = "app-${local.name}-${random_string.suffix.result}"
   location            = azurerm_resource_group.app.location
@@ -140,6 +147,8 @@ resource "azurerm_linux_web_app_slot" "staging" {
 # --------------------
 # Key Vault
 # --------------------
+# checkov:skip=CKV_AZURE_189: Public access allowed for demo simplicity
+# checkov:skip=CKV2_AZURE_32: Private endpoint not implemented in portfolio project
 data "azurerm_client_config" "current" {}
 
 resource "azurerm_key_vault" "kv" {

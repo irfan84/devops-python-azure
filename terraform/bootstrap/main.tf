@@ -16,9 +16,10 @@ resource "random_string" "suffix" {
 # -------------------------------------------------
 # Terraform State Storage Account (Enterprise Safe)
 # -------------------------------------------------
-# checkov:skip=CKV2_AZURE_1: CMK encryption skipped for bootstrap state
-# checkov:skip=CKV2_AZURE_33: Private endpoint not required for portfolio demo
-# checkov:skip=CKV2_AZURE_40: Shared key auth required for Terraform backend
+## checkov:skip=CKV_AZURE_33: Queue logging not required for terraform backend
+# checkov:skip=CKV2_AZURE_1: CMK encryption not required for portfolio backend
+# checkov:skip=CKV2_AZURE_33: Private endpoint not required for demo environment
+# checkov:skip=CKV2_AZURE_40: Shared key restriction not required for backend state
 # checkov:skip=CKV2_AZURE_41: SAS expiration policy not required for backend
 resource "azurerm_storage_account" "tfstate" {
   name                            = "tfstate${var.project}${random_string.suffix.result}"
@@ -30,6 +31,7 @@ resource "azurerm_storage_account" "tfstate" {
   https_traffic_only_enabled      = true
   min_tls_version                 = "TLS1_2"
   allow_nested_items_to_be_public = false
+  public_network_access_enabled = true
 
   blob_properties {
     versioning_enabled = true
