@@ -1,24 +1,63 @@
 trigger:
-- main
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - app/**
+      - tests/**
+      - pipelines/ci-pipeline.yml
+      - pipelines/cd-pipeline.yml
+      - terraform/**
 
 pr:
-- main
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - app/**
+      - tests/**
+      - pipelines/ci-pipeline.yml
+      - pipelines/cd-pipeline.yml
+      - terraform/**
 
 pool:
   name: self-hosted-dev
 
+variables:
+  pythonVersion: '3.10'
+
 steps:
+# ---------------------------
+# Use Python
+# ---------------------------
 - task: UsePythonVersion@0
   inputs:
-    versionSpec: '3.10'
+    versionSpec: '$(pythonVersion)'
+  displayName: "Use Python $(pythonVersion)"
 
+# ---------------------------
+# Install + Test
+# ---------------------------
 - script: |
-    python -m venv .venv
     python -m pip install --upgrade pip
     pip install -r app/requirements.txt
     pytest -q
-  displayName: "Install dependencies and run tests"
+  displayName: "Install dependencies and run unit tests"
 
+# ---------------------------
+# Security Scan (SAST + IaC)
+# ---------------------------
+- script: |
+    pip install bandit checkov
+    bandit -r ./app
+    checkov -d ./terraform
+  displayName: "Security Scan (Bandit + Checkov)"
+
+# ---------------------------
+# Package Artifact (ONLY main)
+# ---------------------------
 - task: ArchiveFiles@2
   inputs:
     rootFolderOrFile: 'app'
@@ -26,6 +65,13 @@ steps:
     archiveType: 'zip'
     archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
     replaceExistingArchive: true
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  displayName: "Package app artifact (main only)"
 
+# ---------------------------
+# Publish Artifact (ONLY main)
+# ---------------------------
 - publish: '$(Build.ArtifactStagingDirectory)/app.zip'
   artifact: drop
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  displayName: "Publish artifact (main only)"
