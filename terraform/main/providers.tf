@@ -1,3 +1,4 @@
+# providers.tf
 terraform {
   required_version = ">= 1.5.0"
 
@@ -11,4 +12,5 @@ terraform {
 
 provider "azurerm" {
   features {}
+  storage_use_azuread = true 
 }
