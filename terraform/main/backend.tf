@@ -1,8 +1,6 @@
+# backend.tf
 terraform {
-  backend "azurerm" {
-    resource_group_name  = "rg-tfstate-devopspy-dev"
-    storage_account_name = "tfstatedevopspyqkj29jab"
-    container_name       = "tfstate"
-    key                  = "myapp.prod.tfstate"
-  }
+  # We moved the 'required_providers' to providers.tf, 
+  # so we only keep the backend socket here.
+  backend "azurerm" {}
 }

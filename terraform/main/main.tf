@@ -162,7 +162,7 @@ resource "azurerm_key_vault" "kv" {
   sku_name                   = "standard"
 
   purge_protection_enabled   = true
-  soft_delete_retention_days = 90
+  soft_delete_retention_days = 7
   public_network_access_enabled = true
 
   network_acls {
