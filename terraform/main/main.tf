@@ -26,9 +26,10 @@ resource "random_string" "suffix" {
 # --------------------
 # App Service Plan
 # --------------------
-# checkov:skip=CKV_AZURE_212: Minimum instances skipped for cost efficiency
-# checkov:skip=CKV_AZURE_225: Zone redundancy skipped for cost efficiency
 resource "azurerm_service_plan" "plan" {
+# checkov:skip=CKV_AZURE_212: Minimum instance count not required for portfolio environment
+# checkov:skip=CKV_AZURE_225: Zone redundancy requires Premium SKU (cost optimization decision)
+  
   name                = "asp-${local.name}"
   location            = azurerm_resource_group.app.location
   resource_group_name = azurerm_resource_group.app.name
@@ -61,12 +62,12 @@ resource "azurerm_application_insights" "ai" {
 # --------------------
 # Linux Web App (Production)
 # --------------------
-# checkov:skip=CKV_AZURE_13: App Service authentication not required for demo
-# checkov:skip=CKV_AZURE_17: Client certificates not required for demo
-# checkov:skip=CKV_AZURE_18: HTTP version policy not enforced for demo
-# checkov:skip=CKV_AZURE_222: Public network access required for public web app
-# checkov:skip=CKV_AZURE_88: Azure Files not required for this workload
 resource "azurerm_linux_web_app" "app" {
+# checkov:skip=CKV_AZURE_13: App Service Authentication not required for public demo app
+# checkov:skip=CKV_AZURE_17: Client certificate enforcement not required for demo
+# checkov:skip=CKV_AZURE_222: Public network access required for public-facing portfolio app
+# checkov:skip=CKV_AZURE_88: Azure Files not required for stateless demo app
+
   name                = "app-${local.name}-${random_string.suffix.result}"
   location            = azurerm_resource_group.app.location
   resource_group_name = azurerm_resource_group.app.name
@@ -80,10 +81,11 @@ resource "azurerm_linux_web_app" "app" {
   }
 
   site_config {
-    always_on            = true
-    minimum_tls_version  = "1.2"
-    ftps_state           = "Disabled"
-    health_check_path    = "/health"
+    always_on           = true
+    minimum_tls_version = "1.2"
+    ftps_state          = "Disabled"
+    health_check_path   = "/health"
+    http2_enabled       = true
 
     application_stack {
       python_version = "3.10"
@@ -147,11 +149,12 @@ resource "azurerm_linux_web_app_slot" "staging" {
 # --------------------
 # Key Vault
 # --------------------
-# checkov:skip=CKV_AZURE_189: Public access allowed for demo simplicity
-# checkov:skip=CKV2_AZURE_32: Private endpoint not implemented in portfolio project
 data "azurerm_client_config" "current" {}
 
 resource "azurerm_key_vault" "kv" {
+  # checkov:skip=CKV2_AZURE_32: Private endpoint not required for demo
+  # checkov:skip=CKV_AZURE_189: Public network access required for learning environment
+
   name                       = "kv-${local.name}-${random_string.suffix.result}"
   location                   = azurerm_resource_group.app.location
   resource_group_name        = azurerm_resource_group.app.name
