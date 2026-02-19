@@ -1,11 +1,5 @@
 #############################################
-# main.tf (clean, enterprise-style)
-# - App Service (Linux) + staging slot
-# - Log Analytics + Application Insights (workspace-based)
-# - App Insights wired to BOTH prod + staging
-# - App Service diagnostic logs enabled
-# - Key Vault (access policy model for simplicity)
-# - Managed Identity enabled on Web App (future-ready)
+# main.tf (enterprise-hardened baseline)
 #############################################
 
 locals {
@@ -21,7 +15,7 @@ resource "azurerm_resource_group" "app" {
 }
 
 # --------------------
-# Random suffix for globally-unique resource names
+# Random suffix
 # --------------------
 resource "random_string" "suffix" {
   length  = 5
@@ -30,9 +24,12 @@ resource "random_string" "suffix" {
 }
 
 # --------------------
-# App Service Plan (S1 supports deployment slots)
+# App Service Plan
 # --------------------
 resource "azurerm_service_plan" "plan" {
+# checkov:skip=CKV_AZURE_212: Minimum instance count not required for portfolio environment
+# checkov:skip=CKV_AZURE_225: Zone redundancy requires Premium SKU (cost optimization decision)
+  
   name                = "asp-${local.name}"
   location            = azurerm_resource_group.app.location
   resource_group_name = azurerm_resource_group.app.name
@@ -41,7 +38,7 @@ resource "azurerm_service_plan" "plan" {
 }
 
 # --------------------
-# Log Analytics Workspace
+# Log Analytics
 # --------------------
 resource "azurerm_log_analytics_workspace" "law" {
   name                = "law-${local.name}-${random_string.suffix.result}"
@@ -52,7 +49,7 @@ resource "azurerm_log_analytics_workspace" "law" {
 }
 
 # --------------------
-# Application Insights (workspace-based)
+# Application Insights
 # --------------------
 resource "azurerm_application_insights" "ai" {
   name                = "appi-${local.name}-${random_string.suffix.result}"
@@ -63,30 +60,40 @@ resource "azurerm_application_insights" "ai" {
 }
 
 # --------------------
-# Linux Web App (Production slot)
+# Linux Web App (Production)
 # --------------------
 resource "azurerm_linux_web_app" "app" {
+# checkov:skip=CKV_AZURE_13: App Service Authentication not required for public demo app
+# checkov:skip=CKV_AZURE_17: Client certificate enforcement not required for demo
+# checkov:skip=CKV_AZURE_222: Public network access required for public-facing portfolio app
+# checkov:skip=CKV_AZURE_88: Azure Files not required for stateless demo app
+
   name                = "app-${local.name}-${random_string.suffix.result}"
   location            = azurerm_resource_group.app.location
   resource_group_name = azurerm_resource_group.app.name
   service_plan_id     = azurerm_service_plan.plan.id
 
-  # Future-ready: enables Managed Identity (great for Key Vault integration later)
+  https_only = true
+  client_affinity_enabled = false
+
   identity {
     type = "SystemAssigned"
   }
 
   site_config {
-  always_on = true
+    always_on           = true
+    minimum_tls_version = "1.2"
+    ftps_state          = "Disabled"
+    health_check_path   = "/health"
+    http2_enabled       = true
 
-  application_stack {
-    python_version = "3.10"
+    application_stack {
+      python_version = "3.10"
+    }
+
+    app_command_line = "gunicorn main:app --bind=0.0.0.0:8000"
   }
 
-  app_command_line = "gunicorn main:app --bind=0.0.0.0:8000"
-}
-
-  # Basic diagnostics: helpful for enterprise troubleshooting
   logs {
     detailed_error_messages = true
     failed_request_tracing  = true
@@ -103,21 +110,25 @@ resource "azurerm_linux_web_app" "app" {
     WEBSITES_PORT                  = "8000"
     SCM_DO_BUILD_DURING_DEPLOYMENT = "true"
 
-    # App Insights (wire telemetry)
     APPINSIGHTS_INSTRUMENTATIONKEY        = azurerm_application_insights.ai.instrumentation_key
     APPLICATIONINSIGHTS_CONNECTION_STRING = azurerm_application_insights.ai.connection_string
   }
 }
 
 # --------------------
-# Staging Slot (monitored too)
+# Staging Slot
 # --------------------
 resource "azurerm_linux_web_app_slot" "staging" {
   name           = "staging"
   app_service_id = azurerm_linux_web_app.app.id
 
+  https_only = true
+
   site_config {
-    always_on = true
+    always_on           = true
+    minimum_tls_version = "1.2"
+    ftps_state          = "Disabled"
+    health_check_path   = "/health"
 
     application_stack {
       python_version = "3.10"
@@ -127,35 +138,44 @@ resource "azurerm_linux_web_app_slot" "staging" {
   }
 
   app_settings = {
-    WEBSITES_PORT = "8000"
-    SCM_DO_BUILD_DURING_DEPLOYMENT = "true" 
+    WEBSITES_PORT                  = "8000"
+    SCM_DO_BUILD_DURING_DEPLOYMENT = "true"
 
-    # App Insights (wire telemetry for staging too)
     APPINSIGHTS_INSTRUMENTATIONKEY        = azurerm_application_insights.ai.instrumentation_key
     APPLICATIONINSIGHTS_CONNECTION_STRING = azurerm_application_insights.ai.connection_string
   }
 }
 
 # --------------------
-# Key Vault (Access Policy model for learning / simplicity)
+# Key Vault
 # --------------------
 data "azurerm_client_config" "current" {}
 
 resource "azurerm_key_vault" "kv" {
+  # checkov:skip=CKV2_AZURE_32: Private endpoint not required for demo
+  # checkov:skip=CKV_AZURE_189: Public network access required for learning environment
+
   name                       = "kv-${local.name}-${random_string.suffix.result}"
   location                   = azurerm_resource_group.app.location
   resource_group_name        = azurerm_resource_group.app.name
   tenant_id                  = data.azurerm_client_config.current.tenant_id
   sku_name                   = "standard"
 
-  purge_protection_enabled   = false
-  soft_delete_retention_days = 7
+  purge_protection_enabled   = true
+  soft_delete_retention_days = 90
+  public_network_access_enabled = true
 
-  # Keep access policy model on for this project
+  network_acls {
+    default_action = "Deny"
+    bypass         = "AzureServices"
+  }
+
   enable_rbac_authorization = false
 }
 
-# Key Vault Access Policy (Terraform identity/user)
+# --------------------
+# KV Access Policy
+# --------------------
 resource "azurerm_key_vault_access_policy" "current_user" {
   key_vault_id = azurerm_key_vault.kv.id
   tenant_id    = data.azurerm_client_config.current.tenant_id
@@ -169,13 +189,16 @@ resource "azurerm_key_vault_access_policy" "current_user" {
   ]
 }
 
-# Key Vault Secret
+# --------------------
+# KV Secret
+# --------------------
 resource "azurerm_key_vault_secret" "app_secret" {
-  name         = "APP-SECRET"
-  value        = "change-me"
-  key_vault_id = azurerm_key_vault.kv.id
+  name            = "APP-SECRET"
+  value           = "change-me"
+  key_vault_id    = azurerm_key_vault.kv.id
+  content_type    = "text/plain"
+  expiration_date = timeadd(timestamp(), "8760h")
 
-  # Avoid eventual-consistency / ordering issues
   depends_on = [
     azurerm_key_vault_access_policy.current_user
   ]
