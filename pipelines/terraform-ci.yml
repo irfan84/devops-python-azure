@@ -72,14 +72,15 @@ stages:
           $tfDir = Join-Path $baseDir "$(TF_ROOT)"
           $planPath = Join-Path $tfDir "tfplan"
 
-          # 2. NUCLEAR CLEANUP: Rename stale folder if delete fails (common on Windows agents)
+          # 2. NUCLEAR RESET: Rename stale folder to bypass Windows file locks
           Write-Host "==> Resetting local Terraform state"
           $dotTerraform = Join-Path $tfDir ".terraform"
           if (Test-Path $dotTerraform) { 
               $timestamp = Get-Date -Format "yyyyMMddHHmmss"
-              Rename-Item -Path $dotTerraform -NewName "$($dotTerraform)_old_$timestamp" -ErrorAction SilentlyContinue
-              # Try delete again now that it's moved, but don't stop if it fails
-              Remove-Item -Path "$($dotTerraform)_old_$timestamp" -Recurse -Force -ErrorAction SilentlyContinue
+              $oldDir = "$($dotTerraform)_old_$timestamp"
+              Rename-Item -Path $dotTerraform -NewName $oldDir -ErrorAction SilentlyContinue
+              # Optional: Background cleanup of the renamed folder
+              Remove-Item -Path $oldDir -Recurse -Force -ErrorAction SilentlyContinue
           }
           
           # 3. Execution using Push-Location
@@ -92,13 +93,13 @@ stages:
               $env:ARM_SUBSCRIPTION_ID = $env:TF_SUBSCRIPTION_ID
               $env:ARM_USE_OIDC        = "true"
 
-              Write-Host "==> Terraform init (remote backend, OIDC)"
-              # Added -input=false and -force-copy to ensure no interactive prompts hang the agent
+              Write-Host "==> Terraform init (Forced Reset)"
+              # ALIGNMENT: Using TFSTATE_SA from your Library screenshot
               terraform init -reconfigure -input=false -force-copy `
-                -backend-config="resource_group_name=$env:TFSTATE_RG" `
-                -backend-config="storage_account_name=$env:TFSTATE_STORAGE" `
-                -backend-config="container_name=$env:TFSTATE_CONTAINER" `
-                -backend-config="key=$env:TFSTATE_KEY" `
+                -backend-config="resource_group_name=$env:TF_STATE_RG" `
+                -backend-config="storage_account_name=$env:TF_STATE_SA" `
+                -backend-config="container_name=$env:TF_STATE_CONTAINER" `
+                -backend-config="key=$env:TF_STATE_KEY" `
                 -backend-config="use_oidc=true" `
                 -backend-config="use_azuread_auth=true"
 
@@ -111,7 +112,7 @@ stages:
               Write-Host "==> Terraform plan"
               terraform plan -out="$planPath" -input=false
 
-              if (!(Test-Path "$planPath")) { throw "CRITICAL: tfplan file not found! Init likely failed silently." }
+              if (!(Test-Path "$planPath")) { throw "CRITICAL: tfplan file not found! Check init logs." }
 
               Write-Host "==> Terraform show"
               terraform show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
@@ -120,11 +121,12 @@ stages:
               Pop-Location
           }
       env:
+        # Mapping exactly to your Library screenshot values
         TF_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
-        TFSTATE_RG: $(TFSTATE_RG)
-        TFSTATE_STORAGE: $(TFSTATE_STORAGE)
-        TFSTATE_CONTAINER: $(TFSTATE_CONTAINER)
-        TFSTATE_KEY: $(TFSTATE_KEY)
+        TF_STATE_RG: $(TFSTATE_RG)
+        TF_STATE_SA: $(TFSTATE_SA)
+        TF_STATE_CONTAINER: $(TFSTATE_CONTAINER)
+        TF_STATE_KEY: $(TFSTATE_KEY)
 
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
       displayName: "Publish binary tfplan"
