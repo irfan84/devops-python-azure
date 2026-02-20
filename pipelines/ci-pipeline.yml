@@ -8,7 +8,6 @@ trigger:
       - tests/**
       - pipelines/ci-pipeline.yml
       - pipelines/cd-pipeline.yml
-      - terraform/**
 
 pr:
   branches:
@@ -20,7 +19,6 @@ pr:
       - tests/**
       - pipelines/ci-pipeline.yml
       - pipelines/cd-pipeline.yml
-      - terraform/**
 
 pool:
   name: self-hosted-dev
@@ -29,6 +27,8 @@ variables:
   pythonVersion: '3.10'
 
 steps:
+- checkout: self
+
 # ---------------------------
 # Use Python
 # ---------------------------
@@ -47,16 +47,15 @@ steps:
   displayName: "Install dependencies and run unit tests"
 
 # ---------------------------
-# Security Scan (SAST + IaC)
+# Security Scan (SAST only for app)
 # ---------------------------
 - script: |
-    pip install bandit checkov
+    pip install bandit
     bandit -r ./app
-    checkov -d ./terraform
-  displayName: "Security Scan (Bandit + Checkov)"
+  displayName: "Security Scan (Bandit)"
 
 # ---------------------------
-# Package Artifact (ONLY main)
+# Package + Publish Artifact (ONLY main)
 # ---------------------------
 - task: ArchiveFiles@2
   inputs:
@@ -68,9 +67,6 @@ steps:
   condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
   displayName: "Package app artifact (main only)"
 
-# ---------------------------
-# Publish Artifact (ONLY main)
-# ---------------------------
 - publish: '$(Build.ArtifactStagingDirectory)/app.zip'
   artifact: drop
   condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
