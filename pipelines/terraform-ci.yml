@@ -21,7 +21,10 @@ pr:
       - pipelines/terraform-cd.yml
 
 variables:
+  # ✅ This should be your VARIABLE GROUP name (NOT a resource group name)
+  # Example variable group name: vg-devopspy-terraform-dev
   - group: rg-tfstate-devopspy-dev
+
   - name: TF_ROOT
     value: terraform/main
   - name: TF_VERSION
@@ -60,54 +63,53 @@ stages:
       displayName: "Azure login (OIDC) + Terraform init/validate/plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
-        scriptType: ps 
+        # ✅ Use PowerShell Core to avoid bash path issues on Windows agents
+        scriptType: pscore
         scriptLocation: inlineScript
         addSpnToEnvironment: true
         inlineScript: |
           $ErrorActionPreference = "Stop"
 
-          # 1. GLOBAL PURGE: Recursively find and delete ALL .terraform folders 
-          # This is the only way to guarantee the "reinitialization required" error is cleared
-          Write-Host "==> Force purging all local Terraform caches to reset backend"
-          Get-ChildItem -Path "$(Build.SourcesDirectory)" -Filter ".terraform" -Recurse | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          Get-ChildItem -Path "$(Build.SourcesDirectory)" -Filter "terraform.tfstate*" -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
+          # 0) Sanity check expected backend vars (from Variable Group)
+          if (-not $env:TFSTATE_RG) { throw "Missing env var TFSTATE_RG (set it in Variable Group)." }
+          if (-not $env:TFSTATE_SA) { throw "Missing env var TFSTATE_SA (set it in Variable Group)." }
+          if (-not $env:TFSTATE_CONTAINER) { throw "Missing env var TFSTATE_CONTAINER (set it in Variable Group)." }
+          if (-not $env:TFSTATE_KEY) { throw "Missing env var TFSTATE_KEY (set it in Variable Group)." }
 
-          # 2. PATH SANITIZATION: Ensure Windows backslashes for all file operations
-          $workDir = "$(Build.SourcesDirectory)/$(TF_ROOT)".Replace("/", "\")
-          $planPath = "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan".Replace("/", "\")
-          
-          Write-Host "==> Working Directory: $workDir"
-          Write-Host "==> Target Plan Path: $planPath"
+          # 1) CLEANUP: Remove stale local Terraform artifacts on self-hosted agents
+          Write-Host "==> Cleaning stale local Terraform artifacts"
+          $tfDir = "$(Build.SourcesDirectory)\$(TF_ROOT)"
+          if (Test-Path "$tfDir\.terraform") { Remove-Item -Path "$tfDir\.terraform" -Recurse -Force }
+          if (Test-Path "$tfDir\terraform.tfstate") { Remove-Item -Path "$tfDir\terraform.tfstate" -Force }
+          if (Test-Path "$tfDir\tfplan") { Remove-Item -Path "$tfDir\tfplan" -Force }
+          if (Test-Path "$tfDir\tfplan.txt") { Remove-Item -Path "$tfDir\tfplan.txt" -Force }
 
-          # 3. EXECUTION: Use Push-Location to ensure shell focus is correct on Windows
-          Push-Location $workDir
-          try {
-              Write-Host "==> Terraform fmt check"
-              terraform fmt -check -recursive
+          # 2) fmt check
+          Write-Host "==> Terraform fmt check"
+          terraform -chdir="$tfDir" fmt -check -recursive
 
-              Write-Host "==> Terraform init"
-              terraform init -reconfigure `
-                -backend-config="resource_group_name=$env:TF_STATE_RG" `
-                -backend-config="storage_account_name=$env:TF_STATE_STORAGE" `
-                -backend-config="container_name=tfstate" `
-                -backend-config="key=terraform.tfstate"
+          # 3) init (OIDC/AAD backend + reconfigure)
+          Write-Host "==> Terraform init"
+          terraform -chdir="$tfDir" init -reconfigure `
+            -backend-config="resource_group_name=$env:TFSTATE_RG" `
+            -backend-config="storage_account_name=$env:TFSTATE_SA" `
+            -backend-config="container_name=$env:TFSTATE_CONTAINER" `
+            -backend-config="key=$env:TFSTATE_KEY" `
+            -backend-config="use_azuread_auth=true" `
+            -backend-config="use_oidc=true"
 
-              Write-Host "==> Terraform validate"
-              terraform validate
+          # 4) validate
+          Write-Host "==> Terraform validate"
+          terraform -chdir="$tfDir" validate
 
-              Write-Host "==> Terraform plan"
-              terraform plan -out="$planPath" -input=false
+          # 5) plan (write inside TF_ROOT so publish steps match)
+          Write-Host "==> Terraform plan"
+          $planPath = "$tfDir\tfplan"
+          terraform -chdir="$tfDir" plan -out="$planPath" -input=false
 
-              if (!(Test-Path "$planPath")) {
-                  throw "Terraform plan file was not created at $planPath"
-              }
-
-              Write-Host "==> Generating Text Plan"
-              terraform show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
-          }
-          finally {
-              Pop-Location
-          }
+          # 6) show
+          Write-Host "==> Terraform show"
+          terraform -chdir="$tfDir" show -no-color "$planPath" | Out-File -FilePath "$tfDir\tfplan.txt" -Encoding utf8
 
     # ---------------------------
     # Publish plan artifacts
