@@ -66,42 +66,48 @@ stages:
         inlineScript: |
           $ErrorActionPreference = "Stop"
 
-          # 1. FORCE CLEANUP: Purge local cache to fix "Reinitialization required" errors
-          Write-Host "==> Cleaning stale local Terraform artifacts"
-          $dotTerraform = Join-Path "$(Build.SourcesDirectory)" "$(TF_ROOT)/.terraform"
-          if (Test-Path $dotTerraform) { Remove-Item -Path $dotTerraform -Recurse -Force }
+          # 1. GLOBAL PURGE: Recursively find and delete ALL .terraform folders 
+          # This is the only way to guarantee the "reinitialization required" error is cleared
+          Write-Host "==> Force purging all local Terraform caches to reset backend"
+          Get-ChildItem -Path "$(Build.SourcesDirectory)" -Filter ".terraform" -Recurse | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Path "$(Build.SourcesDirectory)" -Filter "terraform.tfstate*" -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
 
-          # 2. PATH FIX: Sanitize paths for Windows self-hosted agents
-          $planPathRaw = "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
-          $planPath = $planPathRaw.Replace("/", "\")
+          # 2. PATH SANITIZATION: Ensure Windows backslashes for all file operations
+          $workDir = "$(Build.SourcesDirectory)/$(TF_ROOT)".Replace("/", "\")
+          $planPath = "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan".Replace("/", "\")
+          
+          Write-Host "==> Working Directory: $workDir"
           Write-Host "==> Target Plan Path: $planPath"
 
-          Write-Host "==> Terraform fmt check"
-          terraform -chdir="$(TF_ROOT)" fmt -check -recursive
+          # 3. EXECUTION: Use Push-Location to ensure shell focus is correct on Windows
+          Push-Location $workDir
+          try {
+              Write-Host "==> Terraform fmt check"
+              terraform fmt -check -recursive
 
-          # 3. INIT: Reconfigure without migrate-state (avoiding interactive prompts)
-          Write-Host "==> Terraform init"
-          terraform -chdir="$(TF_ROOT)" init -reconfigure `
-            -backend-config="resource_group_name=$env:TF_STATE_RG" `
-            -backend-config="storage_account_name=$env:TF_STATE_STORAGE" `
-            -backend-config="container_name=tfstate" `
-            -backend-config="key=terraform.tfstate"
+              Write-Host "==> Terraform init"
+              terraform init -reconfigure `
+                -backend-config="resource_group_name=$env:TF_STATE_RG" `
+                -backend-config="storage_account_name=$env:TF_STATE_STORAGE" `
+                -backend-config="container_name=tfstate" `
+                -backend-config="key=terraform.tfstate"
 
-          Write-Host "==> Terraform validate"
-          terraform -chdir="$(TF_ROOT)" validate
+              Write-Host "==> Terraform validate"
+              terraform validate
 
-          # 4. PLAN: Execute and verify file creation
-          Write-Host "==> Terraform plan"
-          terraform -chdir="$(TF_ROOT)" plan -out="$planPath" -input=false
+              Write-Host "==> Terraform plan"
+              terraform plan -out="$planPath" -input=false
 
-          if (!(Test-Path "$planPath")) {
-              Write-Error "Terraform plan file was not created. Check logs above for failures."
-              exit 1
+              if (!(Test-Path "$planPath")) {
+                  throw "Terraform plan file was not created at $planPath"
+              }
+
+              Write-Host "==> Generating Text Plan"
+              terraform show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
           }
-
-          # 5. SHOW: Generate text plan for UI review
-          Write-Host "==> Show plan"
-          terraform -chdir="$(TF_ROOT)" show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
+          finally {
+              Pop-Location
+          }
 
     # ---------------------------
     # Publish plan artifacts
