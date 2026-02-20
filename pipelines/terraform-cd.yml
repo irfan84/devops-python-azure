@@ -1,0 +1,69 @@
+# pipelines/terraform-cd.yml
+name: terraform-cd-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger: none
+pr: none
+
+resources:
+  pipelines:
+  - pipeline: tfci
+    source: terraform-ci   # <-- This must match the pipeline NAME in Azure DevOps UI
+    trigger:
+      branches:
+        include:
+          - main
+
+variables:
+  - group: rg-tfstate-devopspy-dev
+  - name: TF_ROOT
+    value: terraform/main
+  - name: TF_VERSION
+    value: "1.6.6"
+
+stages:
+- stage: Apply_Dev
+  displayName: "Terraform Apply (Dev)"
+  jobs:
+  - deployment: Apply
+    displayName: "Apply tfplan"
+    pool:
+      name: self-hosted-dev
+
+    # IMPORTANT: Put approvals/checks on this Environment in Azure DevOps
+    environment: devopspy-prod
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+
+          - download: tfci
+            displayName: "Download tfplan artifacts from CI"
+            artifact: tfplan
+
+          - task: TerraformInstaller@1
+            displayName: "Install Terraform $(TF_VERSION)"
+            inputs:
+              terraformVersion: "$(TF_VERSION)"
+
+          - task: AzureCLI@2
+            displayName: "Azure login (OIDC) + Terraform init/apply"
+            inputs:
+              azureSubscription: "sc-devopspy-terraform"
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+
+                echo "==> Terraform init (backend.hcl)"
+                terraform -chdir="$(TF_ROOT)" init -reconfigure \
+                  -backend-config=backend.hcl
+
+                echo "==> Apply downloaded plan"
+                ls -la "$(Pipeline.Workspace)/tfci/tfplan"
+
+                # Copy plan into TF folder (Terraform requires local plan file path)
+                cp "$(Pipeline.Workspace)/tfci/tfplan/tfplan" "$(TF_ROOT)/tfplan"
+
+                terraform -chdir="$(TF_ROOT)" apply -input=false -auto-approve tfplan

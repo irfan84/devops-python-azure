@@ -5,7 +5,7 @@ resources:
   pipelines:
   - pipeline: ci
     source: devopspy-ci
-    trigger: none
+    trigger: true
 
 stages:
 - stage: Deploy_Staging

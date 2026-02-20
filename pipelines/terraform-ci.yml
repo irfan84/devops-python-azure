@@ -1,0 +1,81 @@
+# pipelines/terraform-ci.yml
+name: terraform-ci-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - terraform/main/**
+      - pipelines/terraform-ci.yml
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - terraform/main/**
+      - pipelines/terraform-ci.yml
+
+variables:
+  - group: rg-tfstate-devopspy-dev
+  - name: TF_ROOT
+    value: terraform/main
+  - name: TF_VERSION
+    value: "1.6.6"
+
+stages:
+- stage: ValidateAndPlan
+  displayName: "Terraform Validate + Plan"
+  jobs:
+  - job: Plan
+    displayName: "Plan"
+    pool:
+      name: self-hosted-dev
+
+    steps:
+    - checkout: self
+
+    - task: TerraformInstaller@1
+      displayName: "Install Terraform $(TF_VERSION)"
+      inputs:
+        terraformVersion: "$(TF_VERSION)"
+
+    # Login using OIDC service connection
+    - task: AzureCLI@2
+      displayName: "Azure login (OIDC) + Terraform init/validate/plan"
+      inputs:
+        azureSubscription: "sc-devopspy-terraform"
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+
+          echo "==> Terraform fmt check"
+          terraform -chdir="$(TF_ROOT)" fmt -check -recursive
+
+          echo "==> Terraform init (backend.hcl)"
+          terraform -chdir="$(TF_ROOT)" init -reconfigure \
+            -backend-config=backend.hcl
+
+          echo "==> Terraform validate"
+          terraform -chdir="$(TF_ROOT)" validate
+
+          echo "==> Terraform plan"
+          terraform -chdir="$(TF_ROOT)" plan \
+            -out=tfplan \
+            -input=false
+
+          echo "==> Show plan"
+          terraform -chdir="$(TF_ROOT)" show -no-color tfplan > tfplan.txt
+
+    # Publish plan artifact (used by CD on main)
+    - publish: "$(TF_ROOT)/tfplan"
+      displayName: "Publish tfplan artifact"
+      artifact: tfplan
+
+    - publish: "$(TF_ROOT)/tfplan.txt"
+      displayName: "Publish tfplan text artifact"
+      artifact: tfplan-text
