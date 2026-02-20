@@ -50,8 +50,8 @@ steps:
 # Security Scan (SAST only for app)
 # ---------------------------
 - script: |
-    pip install bandit
-    bandit -r ./app
+    # -v for verbose, -f screen to ensure it prints to logs
+    bandit -r ./app -v -f screen
   displayName: "Security Scan (Bandit)"
 
 # ---------------------------

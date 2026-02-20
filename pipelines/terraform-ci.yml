@@ -1,3 +1,4 @@
+# pipelines/terraform-ci.yml
 name: terraform-ci-$(Date:yyyyMMdd)$(Rev:.r)
 
 trigger:
@@ -26,15 +27,18 @@ variables:
     value: terraform/main
   - name: TF_VERSION
     value: "1.6.6"
+  - name: CHECKOV_VERSION
+    value: "3.2.0"   # pin if you prefer stability; change as needed
 
 stages:
 - stage: ValidateAndPlan
-  displayName: "Terraform Validate + Plan"
+  displayName: "Terraform Validate + Plan + IaC Scan"
   jobs:
   - job: Plan
     displayName: "Plan"
     pool:
       name: self-hosted-dev
+
     steps:
     - checkout: self
 
@@ -43,15 +47,33 @@ stages:
       inputs:
         terraformVersion: "$(TF_VERSION)"
 
+    # ---------------------------
+    # Checkov (IaC Scan)
+    # ---------------------------
+    - task: PowerShell@2
+      displayName: "IaC Security Scan (Checkov)"
+      inputs:
+        targetType: inline
+        script: |
+          $ErrorActionPreference = "Stop"
+
+          python -m pip install --upgrade pip
+          pip install "checkov==$(CHECKOV_VERSION)"
+
+          # Scan only Terraform folder (no redundancy with app pipeline)
+          checkov -d "$(TF_ROOT)" --quiet
+
+    # ---------------------------
+    # Terraform init/validate/plan (OIDC)
+    # ---------------------------
     - task: AzureCLI@2
       displayName: "Azure login (OIDC) + Terraform init/validate/plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
-        scriptType: pscore
+        scriptType: ps
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference = "Stop"
-          Set-StrictMode -Version Latest
 
           echo "==> Terraform fmt check"
           terraform -chdir="$(TF_ROOT)" fmt -check -recursive
@@ -68,7 +90,9 @@ stages:
           echo "==> Show plan"
           terraform -chdir="$(TF_ROOT)" show -no-color tfplan | Out-File -FilePath "$(TF_ROOT)/tfplan.txt" -Encoding utf8
 
-    # Publish plan artifact ONLY on main (PR runs won't publish / won't trigger CD apply)
+    # ---------------------------
+    # Publish plan artifacts (MAIN only)
+    # ---------------------------
     - publish: "$(TF_ROOT)/tfplan"
       displayName: "Publish tfplan artifact (main only)"
       artifact: tfplan
