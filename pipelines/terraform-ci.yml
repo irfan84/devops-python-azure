@@ -61,7 +61,7 @@ stages:
       displayName: "OIDC Login + terraform init/validate/plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
-        scriptType: ps # Use 'ps' for Windows PowerShell 5.1 on self-hosted
+        scriptType: ps 
         scriptLocation: inlineScript
         addSpnToEnvironment: true
         inlineScript: |
@@ -72,10 +72,15 @@ stages:
           $tfDir = Join-Path $baseDir "$(TF_ROOT)"
           $planPath = Join-Path $tfDir "tfplan"
 
-          # 2. Aggressive Cleanup of stale local state
-          Write-Host "==> Cleaning stale local Terraform artifacts"
+          # 2. NUCLEAR CLEANUP: Rename stale folder if delete fails (common on Windows agents)
+          Write-Host "==> Resetting local Terraform state"
           $dotTerraform = Join-Path $tfDir ".terraform"
-          if (Test-Path $dotTerraform) { Remove-Item -Path $dotTerraform -Recurse -Force }
+          if (Test-Path $dotTerraform) { 
+              $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+              Rename-Item -Path $dotTerraform -NewName "$($dotTerraform)_old_$timestamp" -ErrorAction SilentlyContinue
+              # Try delete again now that it's moved, but don't stop if it fails
+              Remove-Item -Path "$($dotTerraform)_old_$timestamp" -Recurse -Force -ErrorAction SilentlyContinue
+          }
           
           # 3. Execution using Push-Location
           Push-Location $tfDir
@@ -88,7 +93,8 @@ stages:
               $env:ARM_USE_OIDC        = "true"
 
               Write-Host "==> Terraform init (remote backend, OIDC)"
-              terraform init -reconfigure `
+              # Added -input=false and -force-copy to ensure no interactive prompts hang the agent
+              terraform init -reconfigure -input=false -force-copy `
                 -backend-config="resource_group_name=$env:TFSTATE_RG" `
                 -backend-config="storage_account_name=$env:TFSTATE_STORAGE" `
                 -backend-config="container_name=$env:TFSTATE_CONTAINER" `
@@ -105,7 +111,7 @@ stages:
               Write-Host "==> Terraform plan"
               terraform plan -out="$planPath" -input=false
 
-              if (!(Test-Path "$planPath")) { throw "tfplan file not found!" }
+              if (!(Test-Path "$planPath")) { throw "CRITICAL: tfplan file not found! Init likely failed silently." }
 
               Write-Host "==> Terraform show"
               terraform show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
