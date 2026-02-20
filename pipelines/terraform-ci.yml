@@ -67,7 +67,7 @@ stages:
       displayName: "Azure login (OIDC) + Terraform init/validate/plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
-        scriptType: pscore
+        scriptType: ps
         scriptLocation: inlineScript
         addSpnToEnvironment: true
         inlineScript: |
