@@ -1,4 +1,3 @@
-# pipelines/terraform-cd.yml
 name: terraform-cd-$(Date:yyyyMMdd)$(Rev:.r)
 
 trigger: none
@@ -7,7 +6,7 @@ pr: none
 resources:
   pipelines:
   - pipeline: tfci
-    source: terraform-ci   # <-- This must match the pipeline NAME in Azure DevOps UI
+    source: terraform-ci
     trigger:
       branches:
         include:
@@ -21,15 +20,15 @@ variables:
     value: "1.6.6"
 
 stages:
-- stage: Apply_Dev
-  displayName: "Terraform Apply (Dev)"
+- stage: Apply_Prod
+  displayName: "Terraform Apply (Prod)"
   jobs:
-  - deployment: Apply
-    displayName: "Apply tfplan"
+  - deployment: ApplyProd
+    displayName: "Apply tfplan (Prod)"
     pool:
       name: self-hosted-dev
 
-    # IMPORTANT: Put approvals/checks on this Environment in Azure DevOps
+    # Use ONLY prod environment (put approvals/checks here)
     environment: devopspy-prod
 
     strategy:
@@ -50,20 +49,20 @@ stages:
           - task: AzureCLI@2
             displayName: "Azure login (OIDC) + Terraform init/apply"
             inputs:
-              azureSubscription: "sc-devopspy-terraform"
-              scriptType: bash
+              azureSubscription: "sc-devopspy-terraform-oidc"
+              scriptType: pscore
               scriptLocation: inlineScript
               inlineScript: |
-                set -euo pipefail
+                $ErrorActionPreference = "Stop"
+                Set-StrictMode -Version Latest
 
                 echo "==> Terraform init (backend.hcl)"
-                terraform -chdir="$(TF_ROOT)" init -reconfigure \
-                  -backend-config=backend.hcl
+                terraform -chdir="$(TF_ROOT)" init -reconfigure -backend-config=backend.hcl
+
+                echo "==> Copy downloaded plan into TF folder"
+                Get-ChildItem -Recurse "$(Pipeline.Workspace)/tfci/tfplan" | Format-List
+
+                Copy-Item "$(Pipeline.Workspace)/tfci/tfplan/tfplan" "$(TF_ROOT)/tfplan" -Force
 
                 echo "==> Apply downloaded plan"
-                ls -la "$(Pipeline.Workspace)/tfci/tfplan"
-
-                # Copy plan into TF folder (Terraform requires local plan file path)
-                cp "$(Pipeline.Workspace)/tfci/tfplan/tfplan" "$(TF_ROOT)/tfplan"
-
-                terraform -chdir="$(TF_ROOT)" apply -input=false -auto-approve tfplan
+                terraform -chdir="$(TF_ROOT)" apply -input=false -auto-approve "$(TF_ROOT)/tfplan"
