@@ -2,7 +2,8 @@ name: terraform-ci-$(Date:yyyyMMdd)$(Rev:.r)
 
 trigger:
   branches:
-    include: [ main ]
+    include:
+      - main
   paths:
     include:
       - terraform/**
@@ -11,7 +12,8 @@ trigger:
 
 pr:
   branches:
-    include: [ main ]
+    include:
+      - main
   paths:
     include:
       - terraform/**
@@ -19,9 +21,7 @@ pr:
       - pipelines/terraform-cd.yml
 
 variables:
-  # ✅ Use YOUR real Variable Group name (from your screenshot)
   - group: rg-tfstate-devopspy-dev
-
   - name: TF_ROOT
     value: terraform/main
   - name: TF_VERSION
@@ -40,6 +40,7 @@ stages:
 
     steps:
     - checkout: self
+      clean: true
 
     - task: TerraformInstaller@1
       displayName: "Install Terraform $(TF_VERSION)"
@@ -66,40 +67,56 @@ stages:
         inlineScript: |
           $ErrorActionPreference = "Stop"
 
-          # ---- OIDC -> Terraform AzureRM auth (THIS FIXES your screenshot error) ----
+          Write-Host "==> Cleaning stale local Terraform artifacts"
+          if (Test-Path "$(TF_ROOT)/.terraform") { Remove-Item -Path "$(TF_ROOT)/.terraform" -Recurse -Force }
+          if (Test-Path "$(TF_ROOT)/.terraform.lock.hcl") { Remove-Item -Path "$(TF_ROOT)/.terraform.lock.hcl" -Force }
+
+          Write-Host "==> Terraform fmt check"
+          terraform -chdir="$(TF_ROOT)" fmt -check -recursive
+
+          # --- OIDC -> Terraform AzureRM auth ---
           $env:ARM_CLIENT_ID       = $env:servicePrincipalId
           $env:ARM_TENANT_ID       = $env:tenantId
           $env:ARM_OIDC_TOKEN      = $env:idToken
-          $env:ARM_SUBSCRIPTION_ID = "$(ARM_SUBSCRIPTION_ID)"
+          $env:ARM_SUBSCRIPTION_ID = $env:TF_SUBSCRIPTION_ID
           $env:ARM_USE_OIDC        = "true"
 
-          # Clean stale local TF artifacts on self-hosted agents
-          if (Test-Path "$(TF_ROOT)\.terraform") { Remove-Item "$(TF_ROOT)\.terraform" -Recurse -Force }
-          if (Test-Path "$(TF_ROOT)\.terraform.lock.hcl") { Remove-Item "$(TF_ROOT)\.terraform.lock.hcl" -Force }
+          # --- Backend values from Variable Group via env ---
+          $env:TF_STATE_RG      = $env:TFSTATE_RG
+          $env:TF_STATE_STORAGE = $env:TFSTATE_STORAGE
+          $env:TF_STATE_CONT    = $env:TFSTATE_CONTAINER
+          $env:TF_STATE_KEY     = $env:TFSTATE_KEY
 
-          terraform -chdir="$(TF_ROOT)" fmt -check -recursive
-
-          # Backend config injected from variable group (no hardcoding in repo)
+          Write-Host "==> Terraform init (remote backend, OIDC)"
           terraform -chdir="$(TF_ROOT)" init -reconfigure `
-            -backend-config="resource_group_name=$(TFSTATE_RG)" `
-            -backend-config="storage_account_name=$(TFSTATE_STORAGE)" `
-            -backend-config="container_name=$(TFSTATE_CONTAINER)" `
-            -backend-config="key=$(TFSTATE_KEY)" `
+            -backend-config="resource_group_name=$env:TF_STATE_RG" `
+            -backend-config="storage_account_name=$env:TF_STATE_STORAGE" `
+            -backend-config="container_name=$env:TF_STATE_CONT" `
+            -backend-config="key=$env:TF_STATE_KEY" `
             -backend-config="use_oidc=true" `
             -backend-config="use_azuread_auth=true"
 
+          Write-Host "==> Terraform validate"
           terraform -chdir="$(TF_ROOT)" validate
 
-          # Plan file path MUST be explicit + consistent
-          $planPath = Join-Path $env:BUILD_SOURCESDIRECTORY "$(TF_ROOT)\tfplan"
+          Write-Host "==> Terraform plan"
+          $planPath = "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
           terraform -chdir="$(TF_ROOT)" plan -out="$planPath" -input=false
 
+          Write-Host "==> Terraform show"
           terraform -chdir="$(TF_ROOT)" show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
+      env:
+        # from your variable group (rg-tfstate-devopspy-dev)
+        TF_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        TFSTATE_RG: $(TFSTATE_RG)
+        TFSTATE_STORAGE: $(TFSTATE_STORAGE)
+        TFSTATE_CONTAINER: $(TFSTATE_CONTAINER)
+        TFSTATE_KEY: $(TFSTATE_KEY)
 
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
-      displayName: "Publish tfplan"
+      displayName: "Publish binary tfplan"
       artifact: tfplan
 
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan.txt"
-      displayName: "Publish tfplan.txt"
+      displayName: "Publish text tfplan"
       artifact: tfplan-text
