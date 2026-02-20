@@ -3,10 +3,16 @@
 **/*.tfstate
 **/*.tfstate.*
 **/.terraform.lock.hcl
+*.tfplan
+tfplan
 
 # Python venv
 .venv/
 __pycache__/
 
 # Terraform backend config
-terraform/main/backend.hcl
+*.hcl
+
+# Variables files
+*.tfvars
+config.json
