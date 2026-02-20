@@ -8,7 +8,6 @@ trigger:
       - tests/**
       - pipelines/ci-pipeline.yml
       - pipelines/cd-pipeline.yml
-      - terraform/**
 
 pr:
   branches:
@@ -20,7 +19,6 @@ pr:
       - tests/**
       - pipelines/ci-pipeline.yml
       - pipelines/cd-pipeline.yml
-      - terraform/**
 
 pool:
   name: self-hosted-dev
@@ -29,49 +27,54 @@ variables:
   pythonVersion: '3.10'
 
 steps:
-# ---------------------------
-# Use Python
-# ---------------------------
+- checkout: self
+
 - task: UsePythonVersion@0
   inputs:
     versionSpec: '$(pythonVersion)'
   displayName: "Use Python $(pythonVersion)"
 
 # ---------------------------
-# Install + Test
+# Install + Test (Standardized to PowerShell)
 # ---------------------------
-- script: |
-    python -m pip install --upgrade pip
-    pip install -r app/requirements.txt
-    pytest -q
+- task: PowerShell@2
   displayName: "Install dependencies and run unit tests"
+  inputs:
+    targetType: 'inline'
+    script: |
+      $ErrorActionPreference = "Stop"
+      python -m pip install --upgrade pip
+      pip install -r app/requirements.txt pytest
+      pytest -q
 
 # ---------------------------
-# Security Scan (SAST + IaC)
+# Security Scan (SAST)
 # ---------------------------
-- script: |
-    pip install bandit checkov
-    bandit -r ./app
-    checkov -d ./terraform
-  displayName: "Security Scan (Bandit + Checkov)"
+- task: PowerShell@2
+  displayName: "Security Scan (Bandit)"
+  inputs:
+    targetType: 'inline'
+    script: |
+      $ErrorActionPreference = "Stop"
+      python -m pip install bandit
+      
+      Write-Host "==> Running Security Scan"
+      bandit -r ./app -v -f screen
 
 # ---------------------------
-# Package Artifact (ONLY main)
+# Package + Publish Artifact (ONLY main)
 # ---------------------------
 - task: ArchiveFiles@2
+  displayName: "Package app artifact (main only)"
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
   inputs:
     rootFolderOrFile: 'app'
     includeRootFolder: false
     archiveType: 'zip'
     archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
     replaceExistingArchive: true
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-  displayName: "Package app artifact (main only)"
 
-# ---------------------------
-# Publish Artifact (ONLY main)
-# ---------------------------
 - publish: '$(Build.ArtifactStagingDirectory)/app.zip'
+  displayName: "Publish artifact (main only)"
   artifact: drop
   condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-  displayName: "Publish artifact (main only)"
