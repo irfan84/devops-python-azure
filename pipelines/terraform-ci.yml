@@ -2,8 +2,7 @@ name: terraform-ci-$(Date:yyyyMMdd)$(Rev:.r)
 
 trigger:
   branches:
-    include:
-      - main
+    include: [ main ]
   paths:
     include:
       - terraform/**
@@ -12,8 +11,7 @@ trigger:
 
 pr:
   branches:
-    include:
-      - main
+    include: [ main ]
   paths:
     include:
       - terraform/**
@@ -21,8 +19,7 @@ pr:
       - pipelines/terraform-cd.yml
 
 variables:
-  # ✅ This should be your VARIABLE GROUP name (NOT a resource group name)
-  # Example variable group name: vg-devopspy-terraform-dev
+  # ✅ Use YOUR real Variable Group name (from your screenshot)
   - group: rg-tfstate-devopspy-dev
 
   - name: TF_ROOT
@@ -60,64 +57,49 @@ stages:
           checkov -d "$(TF_ROOT)" --quiet
 
     - task: AzureCLI@2
-      displayName: "Azure login (OIDC) + Terraform init/validate/plan"
+      displayName: "OIDC Login + terraform init/validate/plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
-        # ✅ Use PowerShell Core to avoid bash path issues on Windows agents
-        scriptType: pscore
-        scriptLocation: inlineScript
+        scriptType: "pscore"
+        scriptLocation: "inlineScript"
         addSpnToEnvironment: true
         inlineScript: |
           $ErrorActionPreference = "Stop"
 
-          # 0) Sanity check expected backend vars (from Variable Group)
-          if (-not $env:TFSTATE_RG) { throw "Missing env var TFSTATE_RG (set it in Variable Group)." }
-          if (-not $env:TFSTATE_SA) { throw "Missing env var TFSTATE_SA (set it in Variable Group)." }
-          if (-not $env:TFSTATE_CONTAINER) { throw "Missing env var TFSTATE_CONTAINER (set it in Variable Group)." }
-          if (-not $env:TFSTATE_KEY) { throw "Missing env var TFSTATE_KEY (set it in Variable Group)." }
+          # ---- OIDC -> Terraform AzureRM auth (THIS FIXES your screenshot error) ----
+          $env:ARM_CLIENT_ID       = $env:servicePrincipalId
+          $env:ARM_TENANT_ID       = $env:tenantId
+          $env:ARM_OIDC_TOKEN      = $env:idToken
+          $env:ARM_SUBSCRIPTION_ID = "$(ARM_SUBSCRIPTION_ID)"
+          $env:ARM_USE_OIDC        = "true"
 
-          # 1) CLEANUP: Remove stale local Terraform artifacts on self-hosted agents
-          Write-Host "==> Cleaning stale local Terraform artifacts"
-          $tfDir = "$(Build.SourcesDirectory)\$(TF_ROOT)"
-          if (Test-Path "$tfDir\.terraform") { Remove-Item -Path "$tfDir\.terraform" -Recurse -Force }
-          if (Test-Path "$tfDir\terraform.tfstate") { Remove-Item -Path "$tfDir\terraform.tfstate" -Force }
-          if (Test-Path "$tfDir\tfplan") { Remove-Item -Path "$tfDir\tfplan" -Force }
-          if (Test-Path "$tfDir\tfplan.txt") { Remove-Item -Path "$tfDir\tfplan.txt" -Force }
+          # Clean stale local TF artifacts on self-hosted agents
+          if (Test-Path "$(TF_ROOT)\.terraform") { Remove-Item "$(TF_ROOT)\.terraform" -Recurse -Force }
+          if (Test-Path "$(TF_ROOT)\.terraform.lock.hcl") { Remove-Item "$(TF_ROOT)\.terraform.lock.hcl" -Force }
 
-          # 2) fmt check
-          Write-Host "==> Terraform fmt check"
-          terraform -chdir="$tfDir" fmt -check -recursive
+          terraform -chdir="$(TF_ROOT)" fmt -check -recursive
 
-          # 3) init (OIDC/AAD backend + reconfigure)
-          Write-Host "==> Terraform init"
-          terraform -chdir="$tfDir" init -reconfigure `
-            -backend-config="resource_group_name=$env:TFSTATE_RG" `
-            -backend-config="storage_account_name=$env:TFSTATE_SA" `
-            -backend-config="container_name=$env:TFSTATE_CONTAINER" `
-            -backend-config="key=$env:TFSTATE_KEY" `
-            -backend-config="use_azuread_auth=true" `
-            -backend-config="use_oidc=true"
+          # Backend config injected from variable group (no hardcoding in repo)
+          terraform -chdir="$(TF_ROOT)" init -reconfigure `
+            -backend-config="resource_group_name=$(TFSTATE_RG)" `
+            -backend-config="storage_account_name=$(TFSTATE_STORAGE)" `
+            -backend-config="container_name=$(TFSTATE_CONTAINER)" `
+            -backend-config="key=$(TFSTATE_KEY)" `
+            -backend-config="use_oidc=true" `
+            -backend-config="use_azuread_auth=true"
 
-          # 4) validate
-          Write-Host "==> Terraform validate"
-          terraform -chdir="$tfDir" validate
+          terraform -chdir="$(TF_ROOT)" validate
 
-          # 5) plan (write inside TF_ROOT so publish steps match)
-          Write-Host "==> Terraform plan"
-          $planPath = "$tfDir\tfplan"
-          terraform -chdir="$tfDir" plan -out="$planPath" -input=false
+          # Plan file path MUST be explicit + consistent
+          $planPath = Join-Path $env:BUILD_SOURCESDIRECTORY "$(TF_ROOT)\tfplan"
+          terraform -chdir="$(TF_ROOT)" plan -out="$planPath" -input=false
 
-          # 6) show
-          Write-Host "==> Terraform show"
-          terraform -chdir="$tfDir" show -no-color "$planPath" | Out-File -FilePath "$tfDir\tfplan.txt" -Encoding utf8
+          terraform -chdir="$(TF_ROOT)" show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
 
-    # ---------------------------
-    # Publish plan artifacts
-    # ---------------------------
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
-      displayName: "Publish binary tfplan"
+      displayName: "Publish tfplan"
       artifact: tfplan
 
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan.txt"
-      displayName: "Publish text tfplan"
+      displayName: "Publish tfplan.txt"
       artifact: tfplan-text
