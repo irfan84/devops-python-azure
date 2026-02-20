@@ -1,4 +1,3 @@
-# pipelines/terraform-ci.yml
 name: terraform-ci-$(Date:yyyyMMdd)$(Rev:.r)
 
 trigger:
@@ -7,8 +6,9 @@ trigger:
       - main
   paths:
     include:
-      - terraform/main/**
+      - terraform/**
       - pipelines/terraform-ci.yml
+      - pipelines/terraform-cd.yml
 
 pr:
   branches:
@@ -16,8 +16,9 @@ pr:
       - main
   paths:
     include:
-      - terraform/main/**
+      - terraform/**
       - pipelines/terraform-ci.yml
+      - pipelines/terraform-cd.yml
 
 variables:
   - group: rg-tfstate-devopspy-dev
@@ -34,7 +35,6 @@ stages:
     displayName: "Plan"
     pool:
       name: self-hosted-dev
-
     steps:
     - checkout: self
 
@@ -43,39 +43,38 @@ stages:
       inputs:
         terraformVersion: "$(TF_VERSION)"
 
-    # Login using OIDC service connection
     - task: AzureCLI@2
       displayName: "Azure login (OIDC) + Terraform init/validate/plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
-        scriptType: bash
+        scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
-          set -euo pipefail
+          $ErrorActionPreference = "Stop"
+          Set-StrictMode -Version Latest
 
           echo "==> Terraform fmt check"
           terraform -chdir="$(TF_ROOT)" fmt -check -recursive
 
           echo "==> Terraform init (backend.hcl)"
-          terraform -chdir="$(TF_ROOT)" init -reconfigure \
-            -backend-config=backend.hcl
+          terraform -chdir="$(TF_ROOT)" init -reconfigure -backend-config=backend.hcl
 
           echo "==> Terraform validate"
           terraform -chdir="$(TF_ROOT)" validate
 
           echo "==> Terraform plan"
-          terraform -chdir="$(TF_ROOT)" plan \
-            -out=tfplan \
-            -input=false
+          terraform -chdir="$(TF_ROOT)" plan -out=tfplan -input=false
 
           echo "==> Show plan"
-          terraform -chdir="$(TF_ROOT)" show -no-color tfplan > tfplan.txt
+          terraform -chdir="$(TF_ROOT)" show -no-color tfplan | Out-File -FilePath "$(TF_ROOT)/tfplan.txt" -Encoding utf8
 
-    # Publish plan artifact (used by CD on main)
+    # Publish plan artifact ONLY on main (PR runs won't publish / won't trigger CD apply)
     - publish: "$(TF_ROOT)/tfplan"
-      displayName: "Publish tfplan artifact"
+      displayName: "Publish tfplan artifact (main only)"
       artifact: tfplan
+      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
 
     - publish: "$(TF_ROOT)/tfplan.txt"
-      displayName: "Publish tfplan text artifact"
+      displayName: "Publish tfplan text artifact (main only)"
       artifact: tfplan-text
+      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
