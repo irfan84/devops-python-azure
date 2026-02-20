@@ -60,17 +60,22 @@ stages:
       displayName: "Azure login (OIDC) + Terraform init/validate/plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
-        scriptType: ps # Uses Windows PowerShell 5.1
+        scriptType: ps 
         scriptLocation: inlineScript
         addSpnToEnvironment: true
         inlineScript: |
           $ErrorActionPreference = "Stop"
 
+          # 1. FORCE CLEANUP: Remove local state folders that cause re-init errors on self-hosted agents
+          Write-Host "==> Cleaning stale local Terraform artifacts"
+          if (Test-Path "$(TF_ROOT)/.terraform") { Remove-Item -Path "$(TF_ROOT)/.terraform" -Recurse -Force }
+          if (Test-Path "$(TF_ROOT)/terraform.tfstate") { Remove-Item -Path "$(TF_ROOT)/terraform.tfstate" -Force }
+
           Write-Host "==> Terraform fmt check"
           terraform -chdir="$(TF_ROOT)" fmt -check -recursive
 
+          # 2. INIT: Use $env: for variables and -reconfigure for backend alignment
           Write-Host "==> Terraform init (Dynamic Config)"
-          # FIX: Changed $(VAR) to $env:VAR to prevent PowerShell ObjectNotFound errors
           terraform -chdir="$(TF_ROOT)" init -reconfigure `
             -backend-config="resource_group_name=$env:TF_STATE_RG" `
             -backend-config="storage_account_name=$env:TF_STATE_STORAGE" `
@@ -80,13 +85,18 @@ stages:
           Write-Host "==> Terraform validate"
           terraform -chdir="$(TF_ROOT)" validate
 
+          # 3. PLAN: Define an absolute path for the plan file to avoid location mismatches
           Write-Host "==> Terraform plan"
-          terraform -chdir="$(TF_ROOT)" plan -out=tfplan -input=false
+          $planPath = "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
+          terraform -chdir="$(TF_ROOT)" plan -out="$planPath" -input=false
 
+          # 4. SHOW: Read from the absolute path
           Write-Host "==> Show plan"
-          # Standardized output path for Windows agents
-          terraform -chdir="$(TF_ROOT)" show -no-color tfplan | Out-File -FilePath "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan.txt" -Encoding utf8
+          terraform -chdir="$(TF_ROOT)" show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
 
+    # ---------------------------
+    # Publish plan artifacts
+    # ---------------------------
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
       displayName: "Publish binary tfplan"
       artifact: tfplan
