@@ -61,52 +61,59 @@ stages:
       displayName: "OIDC Login + terraform init/validate/plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
-        scriptType: "pscore"
-        scriptLocation: "inlineScript"
+        scriptType: ps # Use 'ps' for Windows PowerShell 5.1 on self-hosted
+        scriptLocation: inlineScript
         addSpnToEnvironment: true
         inlineScript: |
           $ErrorActionPreference = "Stop"
 
+          # 1. Normalize Paths for Windows
+          $baseDir = "$(Build.SourcesDirectory)"
+          $tfDir = Join-Path $baseDir "$(TF_ROOT)"
+          $planPath = Join-Path $tfDir "tfplan"
+
+          # 2. Aggressive Cleanup of stale local state
           Write-Host "==> Cleaning stale local Terraform artifacts"
-          if (Test-Path "$(TF_ROOT)/.terraform") { Remove-Item -Path "$(TF_ROOT)/.terraform" -Recurse -Force }
-          if (Test-Path "$(TF_ROOT)/.terraform.lock.hcl") { Remove-Item -Path "$(TF_ROOT)/.terraform.lock.hcl" -Force }
+          $dotTerraform = Join-Path $tfDir ".terraform"
+          if (Test-Path $dotTerraform) { Remove-Item -Path $dotTerraform -Recurse -Force }
+          
+          # 3. Execution using Push-Location
+          Push-Location $tfDir
+          try {
+              Write-Host "==> OIDC Authentication Setup"
+              $env:ARM_CLIENT_ID       = $env:servicePrincipalId
+              $env:ARM_TENANT_ID       = $env:tenantId
+              $env:ARM_OIDC_TOKEN      = $env:idToken
+              $env:ARM_SUBSCRIPTION_ID = $env:TF_SUBSCRIPTION_ID
+              $env:ARM_USE_OIDC        = "true"
 
-          Write-Host "==> Terraform fmt check"
-          terraform -chdir="$(TF_ROOT)" fmt -check -recursive
+              Write-Host "==> Terraform init (remote backend, OIDC)"
+              terraform init -reconfigure `
+                -backend-config="resource_group_name=$env:TFSTATE_RG" `
+                -backend-config="storage_account_name=$env:TFSTATE_STORAGE" `
+                -backend-config="container_name=$env:TFSTATE_CONTAINER" `
+                -backend-config="key=$env:TFSTATE_KEY" `
+                -backend-config="use_oidc=true" `
+                -backend-config="use_azuread_auth=true"
 
-          # --- OIDC -> Terraform AzureRM auth ---
-          $env:ARM_CLIENT_ID       = $env:servicePrincipalId
-          $env:ARM_TENANT_ID       = $env:tenantId
-          $env:ARM_OIDC_TOKEN      = $env:idToken
-          $env:ARM_SUBSCRIPTION_ID = $env:TF_SUBSCRIPTION_ID
-          $env:ARM_USE_OIDC        = "true"
+              Write-Host "==> Terraform fmt check"
+              terraform fmt -check -recursive
 
-          # --- Backend values from Variable Group via env ---
-          $env:TF_STATE_RG      = $env:TFSTATE_RG
-          $env:TF_STATE_STORAGE = $env:TFSTATE_STORAGE
-          $env:TF_STATE_CONT    = $env:TFSTATE_CONTAINER
-          $env:TF_STATE_KEY     = $env:TFSTATE_KEY
+              Write-Host "==> Terraform validate"
+              terraform validate
 
-          Write-Host "==> Terraform init (remote backend, OIDC)"
-          terraform -chdir="$(TF_ROOT)" init -reconfigure `
-            -backend-config="resource_group_name=$env:TF_STATE_RG" `
-            -backend-config="storage_account_name=$env:TF_STATE_STORAGE" `
-            -backend-config="container_name=$env:TF_STATE_CONT" `
-            -backend-config="key=$env:TF_STATE_KEY" `
-            -backend-config="use_oidc=true" `
-            -backend-config="use_azuread_auth=true"
+              Write-Host "==> Terraform plan"
+              terraform plan -out="$planPath" -input=false
 
-          Write-Host "==> Terraform validate"
-          terraform -chdir="$(TF_ROOT)" validate
+              if (!(Test-Path "$planPath")) { throw "tfplan file not found!" }
 
-          Write-Host "==> Terraform plan"
-          $planPath = "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
-          terraform -chdir="$(TF_ROOT)" plan -out="$planPath" -input=false
-
-          Write-Host "==> Terraform show"
-          terraform -chdir="$(TF_ROOT)" show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
+              Write-Host "==> Terraform show"
+              terraform show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
+          }
+          finally {
+              Pop-Location
+          }
       env:
-        # from your variable group (rg-tfstate-devopspy-dev)
         TF_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
         TFSTATE_RG: $(TFSTATE_RG)
         TFSTATE_STORAGE: $(TFSTATE_STORAGE)
