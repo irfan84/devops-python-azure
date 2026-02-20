@@ -27,10 +27,7 @@ stages:
     displayName: "Apply tfplan (Prod)"
     pool:
       name: self-hosted-dev
-
-    # Use ONLY prod environment (put approvals/checks here)
-    environment: devopspy-prod
-
+    environment: devopspy-prod # Approval gate happens here
     strategy:
       runOnce:
         deploy:
@@ -47,22 +44,29 @@ stages:
               terraformVersion: "$(TF_VERSION)"
 
           - task: AzureCLI@2
-            displayName: "Azure login (OIDC) + Terraform init/apply"
+            displayName: "Azure login (OIDC) + Terraform Apply"
             inputs:
               azureSubscription: "sc-devopspy-terraform-oidc"
               scriptType: pscore
               scriptLocation: inlineScript
+              addSpnToEnvironment: true
               inlineScript: |
                 $ErrorActionPreference = "Stop"
-                Set-StrictMode -Version Latest
 
-                echo "==> Terraform init (backend.hcl)"
-                terraform -chdir="$(TF_ROOT)" init -reconfigure -backend-config=backend.hcl
+                # 1. Init using the same Dynamic Config as CI
+                Write-Host "==> Terraform init (Dynamic Config)"
+                terraform -chdir="$(TF_ROOT)" init -reconfigure `
+                  -backend-config="resource_group_name=$(TF_STATE_RG)" `
+                  -backend-config="storage_account_name=$(TF_STATE_STORAGE)" `
+                  -backend-config="container_name=tfstate" `
+                  -backend-config="key=terraform.tfstate"
 
-                echo "==> Copy downloaded plan into TF folder"
-                Get-ChildItem -Recurse "$(Pipeline.Workspace)/tfci/tfplan" | Format-List
+                # 2. Copy the artifact to the correct folder
+                Write-Host "==> Moving plan file"
+                # ADO downloads to $(Pipeline.Workspace)/{alias}/{artifactname}
+                $downloadedPlan = "$(Pipeline.Workspace)/tfci/tfplan/tfplan"
+                Copy-Item $downloadedPlan -Destination "$(TF_ROOT)/tfplan" -Force
 
-                Copy-Item "$(Pipeline.Workspace)/tfci/tfplan/tfplan" "$(TF_ROOT)/tfplan" -Force
-
-                echo "==> Apply downloaded plan"
+                # 3. Apply the plan
+                Write-Host "==> Applying Plan"
                 terraform -chdir="$(TF_ROOT)" apply -input=false -auto-approve "$(TF_ROOT)/tfplan"

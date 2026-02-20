@@ -22,13 +22,13 @@ pr:
       - pipelines/terraform-cd.yml
 
 variables:
-  - group: rg-tfstate-devopspy-dev
+  - group: rg-tfstate-devopspy-dev # Ensure this group has TF_STATE_RG and TF_STATE_STORAGE
   - name: TF_ROOT
     value: terraform/main
   - name: TF_VERSION
     value: "1.6.6"
   - name: CHECKOV_VERSION
-    value: "3.2.0"   # pin if you prefer stability; change as needed
+    value: "3.2.0"
 
 stages:
 - stage: ValidateAndPlan
@@ -56,11 +56,8 @@ stages:
         targetType: inline
         script: |
           $ErrorActionPreference = "Stop"
-
           python -m pip install --upgrade pip
           pip install "checkov==$(CHECKOV_VERSION)"
-
-          # Scan only Terraform folder (no redundancy with app pipeline)
           checkov -d "$(TF_ROOT)" --quiet
 
     # ---------------------------
@@ -70,35 +67,42 @@ stages:
       displayName: "Azure login (OIDC) + Terraform init/validate/plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
-        scriptType: ps
+        scriptType: pscore
         scriptLocation: inlineScript
+        addSpnToEnvironment: true
         inlineScript: |
           $ErrorActionPreference = "Stop"
 
-          echo "==> Terraform fmt check"
+          Write-Host "==> Terraform fmt check"
           terraform -chdir="$(TF_ROOT)" fmt -check -recursive
 
-          echo "==> Terraform init (backend.hcl)"
-          terraform -chdir="$(TF_ROOT)" init -reconfigure -backend-config=backend.hcl
+          # FIX 1: Dynamic Init. This removes the need for a backend.hcl file in GitHub.
+          # Make sure these variable names match your ADO Variable Group.
+          Write-Host "==> Terraform init (Dynamic Config)"
+          terraform -chdir="$(TF_ROOT)" init -reconfigure `
+            -backend-config="resource_group_name=$(TF_STATE_RG)" `
+            -backend-config="storage_account_name=$(TF_STATE_STORAGE)" `
+            -backend-config="container_name=tfstate" `
+            -backend-config="key=terraform.tfstate"
 
-          echo "==> Terraform validate"
+          Write-Host "==> Terraform validate"
           terraform -chdir="$(TF_ROOT)" validate
 
-          echo "==> Terraform plan"
+          Write-Host "==> Terraform plan"
           terraform -chdir="$(TF_ROOT)" plan -out=tfplan -input=false
 
-          echo "==> Show plan"
-          terraform -chdir="$(TF_ROOT)" show -no-color tfplan | Out-File -FilePath "$(TF_ROOT)/tfplan.txt" -Encoding utf8
+          # FIX 2: Ensure the text plan is saved explicitly within TF_ROOT for the publish step
+          Write-Host "==> Show plan"
+          terraform -chdir="$(TF_ROOT)" show -no-color tfplan | Out-File -FilePath "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan.txt" -Encoding utf8
 
     # ---------------------------
-    # Publish plan artifacts (MAIN only)
+    # Publish plan artifacts (Required for CD)
     # ---------------------------
-    - publish: "$(TF_ROOT)/tfplan"
-      displayName: "Publish tfplan artifact (main only)"
+    - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
+      displayName: "Publish binary tfplan"
       artifact: tfplan
-      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+      # Removed 'main only' condition because you need to see the plan in PRs to verify!
 
-    - publish: "$(TF_ROOT)/tfplan.txt"
-      displayName: "Publish tfplan text artifact (main only)"
+    - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan.txt"
+      displayName: "Publish text tfplan"
       artifact: tfplan-text
-      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
