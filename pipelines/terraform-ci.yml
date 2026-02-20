@@ -47,7 +47,7 @@ stages:
     - task: AzureCLI@2
       displayName: "Azure login (OIDC) + Terraform init/validate/plan"
       inputs:
-        azureSubscription: "sc-devopspy-terraform"
+        azureSubscription: "sc-devopspy-terraform-oidc"
         scriptType: bash
         scriptLocation: inlineScript
         inlineScript: |
