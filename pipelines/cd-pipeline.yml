@@ -26,7 +26,7 @@ stages:
           - task: AzureWebApp@1
             displayName: "Deploy to App Service (staging slot)"
             inputs:
-              azureSubscription: "sc-devopspy-dev"
+              azureSubscription: "sc-devopspy-app-oidc"
               appType: "webAppLinux"
               appName: "$(WEB_APP_NAME)"
               resourceGroupName: "rg-devopspy-dev"
@@ -50,7 +50,7 @@ stages:
           - task: AzureAppServiceManage@0
             displayName: "Swap slots"
             inputs:
-              azureSubscription: "sc-devopspy-dev"
+              azureSubscription: "sc-devopspy-app-oidc"
               WebAppName: "$(WEB_APP_NAME)"
               ResourceGroupName: "rg-devopspy-dev"
               SourceSlot: "staging"
