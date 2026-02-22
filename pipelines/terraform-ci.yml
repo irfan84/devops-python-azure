@@ -9,6 +9,9 @@ trigger:
       - terraform/**
       - pipelines/terraform-ci.yml
       - pipelines/terraform-cd.yml
+    exclude:
+      - app/** # Prevent infra plan when only python code changes
+      - tests/**
 
 pr:
   branches:
@@ -17,8 +20,6 @@ pr:
   paths:
     include:
       - terraform/**
-      - pipelines/terraform-ci.yml
-      - pipelines/terraform-cd.yml
 
 variables:
   - group: rg-tfstate-devopspy-dev
