@@ -5,7 +5,10 @@ resources:
   pipelines:
   - pipeline: ci
     source: devopspy-ci
-    trigger: true
+    trigger:
+      branches:
+        include:
+          - main  # ONLY trigger CD when main branch build succeeds
 
 stages:
 - stage: Deploy_Staging
