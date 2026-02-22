@@ -1,4 +1,5 @@
 trigger:
+  batch: true # Prevents multiple concurrent runs
   branches:
     include:
       - main
@@ -8,7 +9,9 @@ trigger:
       - tests/**
       - pipelines/ci-pipeline.yml
       - pipelines/cd-pipeline.yml
+    exclude:
       - terraform/**
+      - README.md
 
 pr:
   branches:
@@ -18,9 +21,6 @@ pr:
     include:
       - app/**
       - tests/**
-      - pipelines/ci-pipeline.yml
-      - pipelines/cd-pipeline.yml
-      - terraform/**
 
 pool:
   name: self-hosted-dev
