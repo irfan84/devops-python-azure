@@ -54,7 +54,7 @@ stages:
               scriptType: pscore
               scriptLocation: inlineScript
               inlineScript: |
-                set -euo pipefail
+                $ErrorActionPreference = "Stop"
 
                 echo "==> Terraform init (backend.hcl)"
                 terraform -chdir="$(TF_ROOT)" init -reconfigure \
