@@ -56,14 +56,20 @@ stages:
               inlineScript: |
                 $ErrorActionPreference = "Stop"
 
-                echo "==> Terraform init (backend.hcl)"
-                terraform -chdir="$(TF_ROOT)" init -reconfigure \
-                  -backend-config=backend.hcl
+                # Mapping OIDC from Variable Group and Task environment
+                $env:ARM_USE_OIDC = "true"
+                $env:ARM_CLIENT_ID = $env:servicePrincipalId
+                $env:ARM_TENANT_ID = $env:tenantId
+                $env:ARM_SUBSCRIPTION_ID = "$(ARM_SUBSCRIPTION_ID)"
 
-                echo "==> Apply downloaded plan"
-                ls -la "$(Pipeline.Workspace)/tfci/tfplan"
+                Write-Host "==> Terraform init (backend.hcl)"
+                # Put this on one line to avoid PowerShell backtick issues
+                terraform -chdir="$(TF_ROOT)" init -reconfigure -backend-config=backend.hcl
 
-                # Copy plan into TF folder (Terraform requires local plan file path)
-                cp "$(Pipeline.Workspace)/tfci/tfplan/tfplan" "$(TF_ROOT)/tfplan"
+                Write-Host "==> Apply downloaded plan"
+                dir "$(Pipeline.Workspace)/tfci/tfplan"
+
+                Write-Host "==> Copying plan"
+                copy "$(Pipeline.Workspace)/tfci/tfplan/tfplan" "$(TF_ROOT)/tfplan"
 
                 terraform -chdir="$(TF_ROOT)" apply -input=false -auto-approve tfplan
