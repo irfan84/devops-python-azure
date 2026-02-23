@@ -147,50 +147,71 @@ resource "azurerm_linux_web_app_slot" "staging" {
 }
 
 # --------------------
-# Key Vault
+# 1. External Lookups
 # --------------------
+
+# Get your current public IP address (to whitelist your laptop/runner)
+data "http" "my_ip" {
+  url = "https://ifconfig.me/ip"
+}
+
+# Look up your manual Service Principal using its Client ID
+data "azuread_service_principal" "pipeline_sp" {
+  client_id = "b424d3e4-4de9-4831-98f2-defcea06e44f"
+}
+
+# Get configuration of the current authenticated user (You or the Pipeline)
 data "azurerm_client_config" "current" {}
 
+# --------------------
+# 2. Key Vault Resource
+# --------------------
 resource "azurerm_key_vault" "kv" {
-  # checkov:skip=CKV2_AZURE_32: Private endpoint not required for demo
-  # checkov:skip=CKV_AZURE_189: Public network access required for learning environment
+  name                        = "kv-${local.name}-${random_string.suffix.result}"
+  location                    = azurerm_resource_group.app.location
+  resource_group_name         = azurerm_resource_group.app.name
+  tenant_id                   = data.azurerm_client_config.current.tenant_id
+  sku_name                    = "standard"
 
-  name                       = "kv-${local.name}-${random_string.suffix.result}"
-  location                   = azurerm_resource_group.app.location
-  resource_group_name        = azurerm_resource_group.app.name
-  tenant_id                  = data.azurerm_client_config.current.tenant_id
-  sku_name                   = "standard"
-
-  purge_protection_enabled   = true
-  soft_delete_retention_days = 7
+  purge_protection_enabled      = true
+  soft_delete_retention_days    = 7
   public_network_access_enabled = true
 
+  # --- Network Security Section ---
   network_acls {
     default_action = "Deny"
     bypass         = "AzureServices"
+
+    # Adds the IP of whoever is running the Terraform command
+    ip_rules = [
+      "${chomp(data.http.my_ip.response_body)}/32"
+    ]
   }
 
-  enable_rbac_authorization = false
+  # --- Permission Model Section ---
+  enable_rbac_authorization = true
 }
 
 # --------------------
-# KV Access Policy
+# 3. RBAC Role Assignments
 # --------------------
-resource "azurerm_key_vault_access_policy" "current_user" {
-  key_vault_id = azurerm_key_vault.kv.id
-  tenant_id    = data.azurerm_client_config.current.tenant_id
-  object_id    = data.azurerm_client_config.current.object_id
 
-  secret_permissions = [
-    "Get",
-    "List",
-    "Set",
-    "Delete"
-  ]
+# Give the CURRENT USER (you or the runner) full admin rights to the vault
+resource "azurerm_role_assignment" "tf_admin" {
+  scope                = azurerm_key_vault.kv.id
+  role_definition_name = "Key Vault Administrator"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
+# Give the MANUAL PIPELINE SP the ability to manage secrets
+resource "azurerm_role_assignment" "pipeline_sp_access" {
+  scope                = azurerm_key_vault.kv.id
+  role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = data.azuread_service_principal.pipeline_sp.object_id
 }
 
 # --------------------
-# KV Secret
+# 4. Key Vault Secret
 # --------------------
 resource "azurerm_key_vault_secret" "app_secret" {
   name            = "APP-SECRET"
@@ -198,8 +219,11 @@ resource "azurerm_key_vault_secret" "app_secret" {
   key_vault_id    = azurerm_key_vault.kv.id
   content_type    = "text/plain"
   expiration_date = timeadd(timestamp(), "8760h")
-
+  
+  # Explicitly wait for permissions and network rules to settle
   depends_on = [
-    azurerm_key_vault_access_policy.current_user
+    azurerm_role_assignment.tf_admin,
+    azurerm_role_assignment.pipeline_sp_access,
+    azurerm_key_vault.kv
   ]
 }
