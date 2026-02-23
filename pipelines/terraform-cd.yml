@@ -57,10 +57,11 @@ stages:
                 $ErrorActionPreference = "Stop"
 
                 # Mapping OIDC from Variable Group and Task environment
-                $env:ARM_USE_OIDC = "true"
-                $env:ARM_CLIENT_ID = $env:servicePrincipalId
-                $env:ARM_TENANT_ID = $env:tenantId
-                $env:ARM_SUBSCRIPTION_ID = "$(ARM_SUBSCRIPTION_ID)"
+                $env:ARM_CLIENT_ID       = $env:servicePrincipalId
+                $env:ARM_TENANT_ID       = $env:tenantId
+                $env:ARM_OIDC_TOKEN      = $env:idToken
+                $env:ARM_SUBSCRIPTION_ID = $env:TF_SUBSCRIPTION_ID
+                $env:ARM_USE_OIDC        = "true"
 
                 Write-Host "==> Terraform init (backend.hcl)"
                 # Put this on one line to avoid PowerShell backtick issues
