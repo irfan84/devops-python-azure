@@ -60,18 +60,18 @@ stages:
                 # Mapping OIDC from Variable Group and Task environment
                 $env:ARM_USE_OIDC = "true"
                 $env:ARM_OIDC_TOKEN = $env:idToken
-                $env:ARM_CLIENT_ID = $env:servicePrincipalId
-                $env:ARM_TENANT_ID = $env:tenantId
+                $env:ARM_CLIENT_ID = "$(ARM_CLIENT_ID)"
+                $env:ARM_TENANT_ID = "$(ARM_TENANT_ID)"
                 $env:ARM_SUBSCRIPTION_ID = "$(ARM_SUBSCRIPTION_ID)"
 
-                Write-Host "==> Terraform init (backend.hcl)"
-                # Put this on one line to avoid PowerShell backtick issues
-                terraform -chdir="$(TF_ROOT)" init -reconfigure -backend-config=backend.hcl
+                Write-Host "==> Terraform init"
+                # Added -input=false to prevent interactive prompts
+                terraform -chdir="$(TF_ROOT)" init -reconfigure -backend-config=backend.hcl -input=false
 
-                Write-Host "==> Apply downloaded plan"
+                Write-Host "==> Preparing Plan"
                 dir "$(Pipeline.Workspace)/tfci/tfplan"
+                copy "$(Pipeline.Workspace)/tfci/tfplan/tfplan" "$(TF_ROOT)/tfplan" -Force
 
-                Write-Host "==> Copying plan"
-                copy "$(Pipeline.Workspace)/tfci/tfplan/tfplan" "$(TF_ROOT)/tfplan"
-
+                Write-Host "==> Terraform Apply"
+                # Terraform uses the providers embedded in the plan file
                 terraform -chdir="$(TF_ROOT)" apply -input=false -auto-approve tfplan
