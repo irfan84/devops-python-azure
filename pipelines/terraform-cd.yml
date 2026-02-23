@@ -51,7 +51,7 @@ stages:
             displayName: "Azure login (OIDC) + Terraform init/apply"
             inputs:
               azureSubscription: "sc-devopspy-terraform-oidc"
-              scriptType: bash
+              scriptType: pscore
               scriptLocation: inlineScript
               inlineScript: |
                 set -euo pipefail
