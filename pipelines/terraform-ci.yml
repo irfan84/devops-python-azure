@@ -11,7 +11,7 @@ trigger:
       - pipelines/terraform-ci.yml
       - pipelines/terraform-cd.yml
     exclude:
-      - app/** # Prevent infra plan when only python code changes
+      - app/**
       - tests/**
 
 pr:
@@ -63,29 +63,25 @@ stages:
       displayName: "OIDC Login + terraform init/validate/plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
-        scriptType: ps 
+        scriptType: ps
         scriptLocation: inlineScript
         addSpnToEnvironment: true
         inlineScript: |
           $ErrorActionPreference = "Stop"
 
-          # 1. Normalize Paths for Windows
-          $baseDir = "$(Build.SourcesDirectory)"
-          $tfDir = Join-Path $baseDir "$(TF_ROOT)"
-          $planPath = Join-Path $tfDir "tfplan"
+          $baseDir   = "$(Build.SourcesDirectory)"
+          $tfDir     = Join-Path $baseDir "$(TF_ROOT)"
+          $planPath  = Join-Path $tfDir "tfplan"
 
-          # 2. NUCLEAR RESET: Rename stale folder to bypass Windows file locks
           Write-Host "==> Resetting local Terraform state"
           $dotTerraform = Join-Path $tfDir ".terraform"
-          if (Test-Path $dotTerraform) { 
+          if (Test-Path $dotTerraform) {
               $timestamp = Get-Date -Format "yyyyMMddHHmmss"
               $oldDir = "$($dotTerraform)_old_$timestamp"
               Rename-Item -Path $dotTerraform -NewName $oldDir -ErrorAction SilentlyContinue
-              # Optional: Background cleanup of the renamed folder
               Remove-Item -Path $oldDir -Recurse -Force -ErrorAction SilentlyContinue
           }
-          
-          # 3. Execution using Push-Location
+
           Push-Location $tfDir
           try {
               Write-Host "==> OIDC Authentication Setup"
@@ -95,8 +91,7 @@ stages:
               $env:ARM_SUBSCRIPTION_ID = $env:TF_SUBSCRIPTION_ID
               $env:ARM_USE_OIDC        = "true"
 
-              Write-Host "==> Terraform init (Forced Reset)"
-              # ALIGNMENT: Using TFSTATE_SA from your Library screenshot
+              Write-Host "==> Terraform init"
               terraform init -reconfigure -input=false -force-copy `
                 -backend-config="resource_group_name=$env:TF_STATE_RG" `
                 -backend-config="storage_account_name=$env:TF_STATE_SA" `
@@ -104,6 +99,8 @@ stages:
                 -backend-config="key=$env:TF_STATE_KEY" `
                 -backend-config="use_oidc=true" `
                 -backend-config="use_azuread_auth=true"
+
+              if (!(Test-Path ".terraform.lock.hcl")) { throw "CRITICAL: .terraform.lock.hcl not found after init!" }
 
               Write-Host "==> Terraform fmt check"
               terraform fmt -check -recursive
@@ -123,7 +120,6 @@ stages:
               Pop-Location
           }
       env:
-        # Mapping exactly to your Library screenshot values
         TF_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
         TF_STATE_RG: $(TFSTATE_RG)
         TF_STATE_SA: $(TFSTATE_SA)
@@ -137,3 +133,7 @@ stages:
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan.txt"
       displayName: "Publish text tfplan"
       artifact: tfplan-text
+
+    - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/.terraform.lock.hcl"
+      displayName: "Publish terraform lockfile"
+      artifact: tf-lockfile
