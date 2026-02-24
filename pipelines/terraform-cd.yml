@@ -63,19 +63,23 @@ stages:
                 $ErrorActionPreference = "Stop"
 
                 # OIDC for azurerm
-                $env:ARM_USE_OIDC        = "true"
-                $env:ARM_OIDC_TOKEN      = $env:idToken
-                $env:ARM_CLIENT_ID       = "$(ARM_CLIENT_ID)"
-                $env:ARM_TENANT_ID       = "$(ARM_TENANT_ID)"
+                $env:ARM_USE_OIDC      = "true"
+                $env:ARM_OIDC_TOKEN    = $env:idToken
+                $env:ARM_CLIENT_ID     = "$(ARM_CLIENT_ID)"
+                $env:ARM_TENANT_ID     = "$(ARM_TENANT_ID)"
                 $env:ARM_SUBSCRIPTION_ID = "$(ARM_SUBSCRIPTION_ID)"
 
                 Write-Host "==> Which terraform am I running?"
-                Get-Command terraform | Format-List *
                 terraform version
 
-                # Checkout same commit as CI plan (important for saved plan compatibility)
-                $ciCommit = $env:RESOURCES_PIPELINES_TFCI_SOURCEVERSION
-                if ([string]::IsNullOrWhiteSpace($ciCommit)) { throw "CI sourceVersion is empty. Check pipeline resource configuration." }
+                # MODIFIED: Use the explicitly mapped environment variable
+                $ciCommit = $env:CI_COMMIT_ID
+                
+                # Validation to catch empty strings (common in manual runs)
+                if ([string]::IsNullOrWhiteSpace($ciCommit) -or $ciCommit -eq "`$(resources.pipelines.tfci.sourceVersion)") { 
+                    throw "CI sourceVersion is empty. If running manually, click 'Resources' and select a terraform-ci run." 
+                }
+                
                 Write-Host "==> Checking out CI commit: $ciCommit"
                 git fetch --all --tags --prune
                 git checkout $ciCommit
@@ -83,7 +87,6 @@ stages:
                 $tfDir = Join-Path "$(Build.SourcesDirectory)" "$(TF_ROOT)"
                 Push-Location $tfDir
                 try {
-                    # Clean provider cache (OK), but DO NOT delete .terraform.lock.hcl
                     if (Test-Path ".terraform") { Remove-Item -Recurse -Force ".terraform" }
 
                     Write-Host "==> Restore lockfile from artifact"
@@ -94,10 +97,10 @@ stages:
 
                     Write-Host "==> Terraform init (lockfile readonly, no upgrades)"
                     terraform init -reconfigure -input=false -lockfile=readonly `
-                      -backend-config="resource_group_name=$(TFSTATE_RG)" `
-                      -backend-config="storage_account_name=$(TFSTATE_SA)" `
-                      -backend-config="container_name=$(TFSTATE_CONTAINER)" `
-                      -backend-config="key=$(TFSTATE_KEY)" `
+                      -backend-config="resource_group_name=$env:TFSTATE_RG" `
+                      -backend-config="storage_account_name=$env:TFSTATE_SA" `
+                      -backend-config="container_name=$env:TFSTATE_CONTAINER" `
+                      -backend-config="key=$env:TFSTATE_KEY" `
                       -backend-config="use_oidc=true" `
                       -backend-config="use_azuread_auth=true"
 
@@ -112,3 +115,5 @@ stages:
               TFSTATE_SA: $(TFSTATE_SA)
               TFSTATE_CONTAINER: $(TFSTATE_CONTAINER)
               TFSTATE_KEY: $(TFSTATE_KEY)
+              # ADDED: Explicitly mapping the resource variable so PowerShell can see it
+              CI_COMMIT_ID: $(resources.pipelines.tfci.sourceVersion)
