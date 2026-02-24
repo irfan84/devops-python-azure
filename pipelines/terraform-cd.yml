@@ -37,7 +37,7 @@ stages:
           steps:
           - checkout: self
             clean: true
-            ref: $(resources.pipeline.tfci.sourceVersion)
+            fetchDepth: 0
 
           - download: tfci
             displayName: "Download tfplan artifact from CI"
@@ -72,6 +72,13 @@ stages:
                 Write-Host "==> Which terraform am I running?"
                 Get-Command terraform | Format-List *
                 terraform version
+
+                # Checkout same commit as CI plan (important for saved plan compatibility)
+                $ciCommit = "$(resources.pipeline.tfci.sourceVersion)"
+                if ([string]::IsNullOrWhiteSpace($ciCommit)) { throw "CI sourceVersion is empty. Check pipeline resource configuration." }
+                Write-Host "==> Checking out CI commit: $ciCommit"
+                git fetch --all --tags --prune
+                git checkout $ciCommit
 
                 $tfDir = Join-Path "$(Build.SourcesDirectory)" "$(TF_ROOT)"
                 Push-Location $tfDir
