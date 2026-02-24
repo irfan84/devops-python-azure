@@ -74,7 +74,7 @@ stages:
                 terraform version
 
                 # Checkout same commit as CI plan (important for saved plan compatibility)
-                $ciCommit = "$(resources.pipeline.tfci.sourceVersion)"
+                $ciCommit = "$(resources.pipelines.tfci.sourceVersion)"
                 if ([string]::IsNullOrWhiteSpace($ciCommit)) { throw "CI sourceVersion is empty. Check pipeline resource configuration." }
                 Write-Host "==> Checking out CI commit: $ciCommit"
                 git fetch --all --tags --prune
