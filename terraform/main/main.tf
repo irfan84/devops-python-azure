@@ -150,11 +150,6 @@ resource "azurerm_linux_web_app_slot" "staging" {
 # 1. External Lookups
 # --------------------
 
-# Get your current public IP address (to whitelist your laptop/runner)
-data "http" "my_ip" {
-  url = "https://ifconfig.me/ip"
-}
-
 # Look up your manual Service Principal using its Client ID
 data "azuread_service_principal" "pipeline_sp" {
   client_id = "b424d3e4-4de9-4831-98f2-defcea06e44f"
@@ -180,13 +175,9 @@ resource "azurerm_key_vault" "kv" {
 
   # --- Network Security Section ---
   network_acls {
-    default_action = "Deny"
+    default_action = "Allow"
     bypass         = "AzureServices"
 
-    # Adds the IP of whoever is running the Terraform command
-    ip_rules = [
-      "${chomp(data.http.my_ip.response_body)}/32"
-    ]
   }
 
   # --- Permission Model Section ---
