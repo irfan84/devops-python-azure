@@ -39,11 +39,11 @@ stages:
             fetchDepth: 0
 
           - download: tfci
-            displayName: "Download tfplan artifact from CI"
+            displayName: "Download artifacts"
             artifact: tfplan
 
           - download: tfci
-            displayName: "Download terraform lockfile artifact"
+            displayName: "Download lockfile"
             artifact: tf-lockfile
 
           - task: TerraformInstaller@1
@@ -52,7 +52,7 @@ stages:
               terraformVersion: "$(TF_VERSION)"
 
           - task: AzureCLI@2
-            displayName: "OIDC Login + Terraform Init + Apply"
+            displayName: "OIDC Login + Terraform Init + Robust Apply"
             inputs:
               azureSubscription: "sc-devopspy-terraform-oidc"
               addSpnToEnvironment: true
@@ -61,50 +61,32 @@ stages:
               inlineScript: |
                 $ErrorActionPreference = "Stop"
 
-                # 1. OIDC Configuration for AzureRM
+                # 1. OIDC Env Setup
                 $env:ARM_USE_OIDC         = "true"
                 $env:ARM_OIDC_TOKEN       = $env:idToken
                 $env:ARM_CLIENT_ID        = "$(ARM_CLIENT_ID)"
                 $env:ARM_TENANT_ID        = "$(ARM_TENANT_ID)"
                 $env:ARM_SUBSCRIPTION_ID  = "$(ARM_SUBSCRIPTION_ID)"
 
-                Write-Host "==> Checking Terraform Version"
-                terraform version
-
-                # 2. Resolve CI commit SHA for deployment consistency
+                # 2. Resolve CI commit
                 $ciCommit = $env:CI_COMMIT_ID
                 if ([string]::IsNullOrWhiteSpace($ciCommit)) {
                     $runId = $env:RESOURCES_PIPELINES_TFCI_RUNID
-                    if ([string]::IsNullOrWhiteSpace($runId)) {
-                        throw "CI commit SHA not available. Link a CI run under 'Resources' to deploy."
-                    }
-
-                    $token   = $env:SYSTEM_ACCESSTOKEN
-                    $orgUrl  = "$(System.CollectionUri)".TrimEnd('/')
-                    $project = "$(System.TeamProject)"
-                    $pipeId  = "$(resources.pipelines.tfci.pipelineID)"
-                    $headers = @{ Authorization = "Bearer $token" }
-                    $runUrl  = "$orgUrl/$project/_apis/pipelines/$pipeId/runs/$runId?api-version=7.1-preview.1"
-
-                    Write-Host "==> Resolving CI commit from Run ID: $runId"
-                    $run = Invoke-RestMethod -Method Get -Uri $runUrl -Headers $headers
+                    $token = $env:SYSTEM_ACCESSTOKEN
+                    $url = "$(System.CollectionUri)$(System.TeamProject)/_apis/pipelines/$(resources.pipelines.tfci.pipelineID)/runs/$runId?api-version=7.1-preview.1"
+                    $run = Invoke-RestMethod -Uri $url -Headers @{Authorization="Bearer $token"}
                     $ciCommit = $run.resources.repositories.self.version
                 }
-
-                Write-Host "==> Checking out Commit: $ciCommit"
-                git fetch --all --tags --prune
-                git checkout $ciCommit
+                git fetch --all; git checkout $ciCommit
 
                 $tfDir = Join-Path "$(Build.SourcesDirectory)" "$(TF_ROOT)"
                 Push-Location $tfDir
                 try {
                     if (Test-Path ".terraform") { Remove-Item -Recurse -Force ".terraform" }
-
-                    Write-Host "==> Restoring Artifacts (Lockfile and Plan)"
                     Copy-Item "$(Pipeline.Workspace)/tfci/tf-lockfile/.terraform.lock.hcl" ".\.terraform.lock.hcl" -Force
                     Copy-Item "$(Pipeline.Workspace)/tfci/tfplan/tfplan" ".\tfplan" -Force
 
-                    Write-Host "==> Terraform Initialization"
+                    Write-Host "==> Initializing Terraform"
                     terraform init -reconfigure -input=false -lockfile=readonly `
                       -backend-config="resource_group_name=$env:TFSTATE_RG" `
                       -backend-config="storage_account_name=$env:TFSTATE_SA" `
@@ -115,26 +97,41 @@ stages:
 
                     $currentIp = $null
                     try {
-                        Write-Host "==> STEP 1: Whitelisting Agent IP for Key Vault access"
                         $currentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
-                        Write-Host "Agent IP: $currentIp"
-
+                        Write-Host "==> Whitelisting Agent IP: $currentIp"
                         az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentIp"
 
-                        Write-Host "==> Waiting 60s for Firewall propagation in New Zealand North..."
-                        Start-Sleep -Seconds 60
+                        # Robust Retry Logic for 403 Forbidden/Firewall Propagation
+                        $maxRetries = 3
+                        $retryCount = 0
+                        $success = $false
 
-                        Write-Host "==> STEP 2: Executing Terraform Apply"
-                        # No backend-config here; only variables and auto-approve.
-                        & terraform apply -auto-approve -input=false -var="use_oidc=true"
-                        
-                        if ($LASTEXITCODE -ne 0) {
-                            throw "Terraform Apply failed with exit code $LASTEXITCODE."
+                        while (-not $success -and $retryCount -lt $maxRetries) {
+                            $retryCount++
+                            Write-Host "==> Attempt $retryCount of $maxRetries: Terraform Apply"
+                            
+                            # Wait increases with each attempt (60s, then 90s, then 120s)
+                            $waitTime = 30 + ($retryCount * 30)
+                            Write-Host "Waiting $waitTime seconds for firewall propagation..."
+                            Start-Sleep -Seconds $waitTime
+
+                            & terraform apply -auto-approve -input=false -var="use_oidc=true" -compact-warnings
+
+                            if ($LASTEXITCODE -eq 0) {
+                                $success = $true
+                                Write-Host "==> Success! Terraform applied."
+                            } else {
+                                Write-Warning "Terraform failed (Exit Code $LASTEXITCODE). Could be firewall propagation. Retrying..."
+                            }
+                        }
+
+                        if (-not $success) {
+                            throw "Terraform Apply failed after $maxRetries attempts. Check Key Vault RBAC or Firewall settings."
                         }
                     }
                     finally {
                         if ($null -ne $currentIp) {
-                            Write-Host "==> STEP 3: Cleanup - Removing Agent IP from Firewall"
+                            Write-Host "==> Cleanup: Removing Firewall Rule"
                             az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentIp"
                         }
                     }
