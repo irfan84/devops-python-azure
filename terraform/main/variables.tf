@@ -8,12 +8,13 @@ variable "environment" {
   default = "dev"
 }
 
-variable "location" {
-  type    = string
-  default = "newzealandnorth"
-}
-
 variable "office_ip" {
   type        = string
   description = "The static IP from Azure DevOps Library"
+}
+
+
+variable "location" {
+  type    = string
+  default = "newzealandnorth"
 }
