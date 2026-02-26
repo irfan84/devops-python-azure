@@ -12,3 +12,8 @@ variable "location" {
   type    = string
   default = "newzealandnorth"
 }
+
+variable "office_ip" {
+  type        = string
+  description = "The static IP from Azure DevOps Library"
+}
