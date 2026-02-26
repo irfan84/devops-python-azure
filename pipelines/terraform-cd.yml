@@ -126,21 +126,28 @@ stages:
                       -backend-config="use_oidc=true" `
                       -backend-config="use_azuread_auth=true"
 
-                    # --- MODIFIED SECTION START ---
-                    Write-Host "==> STEP 1: Forcing Firewall Hole via Azure CLI"
-                    # Get the Agent IP
-                    $agentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
-                    Write-Host "Detected Agent IP: $agentIp"
+                   # --- MODIFIED SECTION START ---
+                    try {
+                        Write-Host "==> STEP 1: Punching Firewall Hole"
+                        $currentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
+                        Write-Host "Current Agent IP detected: $currentIp"
 
-                    # Add the IP directly via CLI using the variable
-                    # Note: Ensure KV_NAME is defined in your variables or env block
-                    az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$agentIp"
+                        # Immediate bypass via CLI
+                        az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentIp"
 
-                    Write-Host "==> Waiting 45s for Azure Firewall propagation in New Zealand North..."
-                    Start-Sleep -Seconds 45
+                        Write-Host "==> Waiting 60s for New Zealand North propagation..."
+                        Start-Sleep -Seconds 60
 
-                    Write-Host "==> STEP 2: Terraform apply full saved plan"
-                    & terraform apply -input=false -auto-approve ".\tfplan"
+                        Write-Host "==> STEP 2: Fresh Terraform Apply"
+                        # Note: Use fresh apply to ensure new network context is picked up
+                        & & terraform apply -auto-approve -input=false -backend-config="resource_group_name=$env:TFSTATE_RG" -backend-config="storage_account_name=$env:TFSTATE_SA" -backend-config="container_name=$env:TFSTATE_CONTAINER" -backend-config="key=$env:TFSTATE_KEY"
+                    }
+                    finally {
+                        Write-Host "==> STEP 3: Enterprise Cleanup - Closing Firewall Hole"
+                        if ($currentIp) {
+                            az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentIp"
+                        }
+                    }
                     # --- MODIFIED SECTION END ---
                 }
                 finally {
