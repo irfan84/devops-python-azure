@@ -183,7 +183,6 @@ resource "azurerm_key_vault" "kv" {
     default_action = "Deny"
     bypass         = "AzureServices"
 
-    # Adds the IP of whoever is running the Terraform command
     ip_rules = [
       "${chomp(data.http.my_ip.response_body)}/32"
     ]
