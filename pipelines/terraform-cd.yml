@@ -127,8 +127,16 @@ stages:
                       -backend-config="use_oidc=true" `
                       -backend-config="use_azuread_auth=true"
 
-                    Write-Host "==> Terraform apply saved plan"
+                    # --- MODIFIED SECTION START ---
+                    Write-Host "==> STEP 1: Targeting Key Vault to open Firewall"
+                    terraform apply -target=azurerm_key_vault.kv -input=false -auto-approve -var="use_oidc=true" 
+
+                    Write-Host "==> Waiting 30s for Azure DNS/Firewall propagation..."
+                    Start-Sleep -Seconds 30
+
+                    Write-Host "==> STEP 2: Terraform apply full saved plan"
                     terraform apply -input=false -auto-approve ".\tfplan"
+                    # --- MODIFIED SECTION END ---
                 }
                 finally {
                     Pop-Location
