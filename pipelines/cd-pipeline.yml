@@ -1,3 +1,5 @@
+name: app-cd-$(Date:yyyyMMdd)$(Rev:.r)
+
 trigger: none
 pr: none
 
@@ -8,7 +10,12 @@ resources:
     trigger:
       branches:
         include:
-          - main  # ONLY trigger CD when main branch build succeeds
+          - main
+
+variables:
+  - group: rg-tfstate-devopspy-dev
+  - name: RESOURCE_GROUP 
+    value: rg-devopspy-dev
 
 stages:
 - stage: Deploy_Staging
@@ -32,9 +39,22 @@ stages:
               azureSubscription: "sc-devopspy-app-oidc"
               appType: "webAppLinux"
               appName: "$(WEB_APP_NAME)"
-              resourceGroupName: "rg-devopspy-dev"
+              resourceGroupName: "$(RESOURCE_GROUP)"
               slotName: "staging"
               package: "$(Pipeline.Workspace)/ci/drop/app.zip"
+
+          # Optional: smoke test before swap (recommended)
+          - task: PowerShell@2
+            displayName: "Smoke test staging /health"
+            inputs:
+              targetType: inline
+              script: |
+                $ErrorActionPreference = "Stop"
+                $url = "https://$(WEB_APP_NAME)-staging.azurewebsites.net/health"
+                Write-Host "Checking $url"
+                $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
+                if ($resp.StatusCode -ne 200) { throw "Health check failed: $($resp.StatusCode)" }
+                Write-Host "Staging health check OK"
 
 - stage: Swap_To_Prod
   displayName: "Swap Staging to Production"
@@ -55,6 +75,6 @@ stages:
             inputs:
               azureSubscription: "sc-devopspy-app-oidc"
               WebAppName: "$(WEB_APP_NAME)"
-              ResourceGroupName: "rg-devopspy-dev"
+              ResourceGroupName: "$(RESOURCE_GROUP)"
               SourceSlot: "staging"
               Action: "Swap Slots"

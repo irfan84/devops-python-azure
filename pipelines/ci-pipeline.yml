@@ -1,5 +1,7 @@
+name: app-ci-$(Date:yyyyMMdd)$(Rev:.r)
+
 trigger:
-  batch: true # Prevents multiple concurrent runs
+  batch: true
   branches:
     include:
       - main
@@ -27,8 +29,13 @@ pool:
 
 variables:
   pythonVersion: '3.10'
+  banditVersion: '1.7.8'
+  checkovVersion: '3.2.0'
 
 steps:
+- checkout: self
+  clean: true
+
 # ---------------------------
 # Use Python
 # ---------------------------
@@ -43,35 +50,46 @@ steps:
 - script: |
     python -m pip install --upgrade pip
     pip install -r app/requirements.txt
-    pytest -q
+    pip install pytest
+    pytest -q --junitxml=$(Build.SourcesDirectory)/test-results.xml
   displayName: "Install dependencies and run unit tests"
+
+- task: PublishTestResults@2
+  displayName: "Publish test results"
+  condition: succeededOrFailed()
+  inputs:
+    testResultsFormat: "JUnit"
+    testResultsFiles: "$(Build.SourcesDirectory)/test-results.xml"
+    failTaskOnFailedTests: true
 
 # ---------------------------
 # Security Scan (SAST + IaC)
 # ---------------------------
 - script: |
-    pip install bandit checkov
-    bandit -r ./app
-    checkov -d ./terraform
+    python -m pip install "bandit==$(banditVersion)" "checkov==$(checkovVersion)"
+    bandit -r ./app -q
+    checkov -d ./terraform --framework terraform --quiet
   displayName: "Security Scan (Bandit + Checkov)"
 
 # ---------------------------
 # Package Artifact (ONLY main)
 # ---------------------------
 - task: ArchiveFiles@2
+  displayName: "Package app artifact (main only)"
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
   inputs:
     rootFolderOrFile: 'app'
     includeRootFolder: false
     archiveType: 'zip'
     archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
     replaceExistingArchive: true
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-  displayName: "Package app artifact (main only)"
 
 # ---------------------------
 # Publish Artifact (ONLY main)
 # ---------------------------
-- publish: '$(Build.ArtifactStagingDirectory)/app.zip'
-  artifact: drop
-  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+- task: PublishPipelineArtifact@1
   displayName: "Publish artifact (main only)"
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  inputs:
+    targetPath: '$(Build.ArtifactStagingDirectory)/app.zip'
+    artifact: drop
