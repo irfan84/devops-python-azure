@@ -184,7 +184,7 @@ resource "azurerm_key_vault" "kv" {
     bypass         = "AzureServices"
 
     ip_rules = [
-      "${chomp(data.http.runner_ip.response_body)}/32", # Dynamic IP from the runner
+      "${chomp(data.http.my_ip.response_body)}/32", # Dynamic IP from the runner
       "${var.office_ip}/32"                             # Static IP from variable
     ]
   }
