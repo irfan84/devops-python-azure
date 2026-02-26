@@ -62,44 +62,33 @@ stages:
                 $ErrorActionPreference = "Stop"
 
                 # OIDC for azurerm
-                $env:ARM_USE_OIDC        = "true"
-                $env:ARM_OIDC_TOKEN      = $env:idToken
-                $env:ARM_CLIENT_ID       = "$(ARM_CLIENT_ID)"
-                $env:ARM_TENANT_ID       = "$(ARM_TENANT_ID)"
-                $env:ARM_SUBSCRIPTION_ID = "$(ARM_SUBSCRIPTION_ID)"
+                $env:ARM_USE_OIDC         = "true"
+                $env:ARM_OIDC_TOKEN       = $env:idToken
+                $env:ARM_CLIENT_ID        = "$(ARM_CLIENT_ID)"
+                $env:ARM_TENANT_ID        = "$(ARM_TENANT_ID)"
+                $env:ARM_SUBSCRIPTION_ID  = "$(ARM_SUBSCRIPTION_ID)"
 
                 Write-Host "==> Which terraform am I running?"
                 terraform version
 
-                # Prefer CI_COMMIT_ID if provided
+                # Resolve CI commit SHA
                 $ciCommit = $env:CI_COMMIT_ID
-
-                # Fallback: resolve commit from CI pipeline run using RUNID + REST API
                 if ([string]::IsNullOrWhiteSpace($ciCommit)) {
                     $runId = $env:RESOURCES_PIPELINES_TFCI_RUNID
                     if ([string]::IsNullOrWhiteSpace($runId)) {
-                        throw "CI commit SHA not available. If running manually, select a terraform-ci run under 'Resources' before running CD."
+                        throw "CI commit SHA not available. Select a run under 'Resources' if running manually."
                     }
 
-                    $token = $env:SYSTEM_ACCESSTOKEN
-                    if ([string]::IsNullOrWhiteSpace($token)) {
-                        throw "SYSTEM_ACCESSTOKEN is empty. Enable 'Allow scripts to access the OAuth token' for this pipeline."
-                    }
-
+                    $token   = $env:SYSTEM_ACCESSTOKEN
                     $orgUrl  = "$(System.CollectionUri)".TrimEnd('/')
                     $project = "$(System.TeamProject)"
                     $pipeId  = "$(resources.pipelines.tfci.pipelineID)"
-
                     $headers = @{ Authorization = "Bearer $token" }
                     $runUrl  = "$orgUrl/$project/_apis/pipelines/$pipeId/runs/$runId?api-version=7.1-preview.1"
 
-                    Write-Host "==> Resolving CI commit from runId=$runId (pipelineId=$pipeId)"
+                    Write-Host "==> Resolving CI commit from runId=$runId"
                     $run = Invoke-RestMethod -Method Get -Uri $runUrl -Headers $headers
-
                     $ciCommit = $run.resources.repositories.self.version
-                    if ([string]::IsNullOrWhiteSpace($ciCommit)) {
-                        throw "Could not resolve CI commit SHA from pipeline run details."
-                    }
                 }
 
                 Write-Host "==> Checking out CI commit: $ciCommit"
@@ -111,13 +100,11 @@ stages:
                 try {
                     if (Test-Path ".terraform") { Remove-Item -Recurse -Force ".terraform" }
 
-                    Write-Host "==> Restore lockfile from artifact"
+                    Write-Host "==> Restore lockfile and plan"
                     Copy-Item "$(Pipeline.Workspace)/tfci/tf-lockfile/.terraform.lock.hcl" ".\.terraform.lock.hcl" -Force
-
-                    Write-Host "==> Copy plan artifact"
                     Copy-Item "$(Pipeline.Workspace)/tfci/tfplan/tfplan" ".\tfplan" -Force
 
-                    Write-Host "==> Terraform init (lockfile readonly, no upgrades)"
+                    Write-Host "==> Terraform init"
                     terraform init -reconfigure -input=false -lockfile=readonly `
                       -backend-config="resource_group_name=$env:TFSTATE_RG" `
                       -backend-config="storage_account_name=$env:TFSTATE_SA" `
@@ -126,29 +113,27 @@ stages:
                       -backend-config="use_oidc=true" `
                       -backend-config="use_azuread_auth=true"
 
-                   # --- MODIFIED SECTION START ---
+                    $currentIp = $null
                     try {
                         Write-Host "==> STEP 1: Punching Firewall Hole"
                         $currentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
                         Write-Host "Current Agent IP detected: $currentIp"
 
-                        # Immediate bypass via CLI
                         az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentIp"
 
                         Write-Host "==> Waiting 60s for New Zealand North propagation..."
                         Start-Sleep -Seconds 60
 
                         Write-Host "==> STEP 2: Fresh Terraform Apply"
-                        # Note: Use fresh apply to ensure new network context is picked up
-                        & & terraform apply -auto-approve -input=false -backend-config="resource_group_name=$env:TFSTATE_RG" -backend-config="storage_account_name=$env:TFSTATE_SA" -backend-config="container_name=$env:TFSTATE_CONTAINER" -backend-config="key=$env:TFSTATE_KEY"
+                        # One clean line to avoid backtick parser issues
+                        & terraform apply -auto-approve -input=false -backend-config="resource_group_name=$env:TFSTATE_RG" -backend-config="storage_account_name=$env:TFSTATE_SA" -backend-config="container_name=$env:TFSTATE_CONTAINER" -backend-config="key=$env:TFSTATE_KEY"
                     }
                     finally {
-                        Write-Host "==> STEP 3: Enterprise Cleanup - Closing Firewall Hole"
-                        if ($currentIp) {
+                        if ($null -ne $currentIp) {
+                            Write-Host "==> STEP 3: Enterprise Cleanup - Closing Firewall Hole for $currentIp"
                             az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentIp"
                         }
                     }
-                    # --- MODIFIED SECTION END ---
                 }
                 finally {
                     Pop-Location
@@ -159,5 +144,9 @@ stages:
               TFSTATE_CONTAINER: $(TFSTATE_CONTAINER)
               TFSTATE_KEY: $(TFSTATE_KEY)
               KV_NAME: $(KV_NAME)
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
               CI_COMMIT_ID: $(resources.pipelines.tfci.sourceVersion)
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+              
