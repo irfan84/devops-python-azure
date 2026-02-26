@@ -140,7 +140,7 @@ stages:
 
                         Write-Host "==> STEP 2: Fresh Terraform Apply"
                         # Note: Use fresh apply to ensure new network context is picked up
-                        & & terraform apply -auto-approve -input=false -backend-config="resource_group_name=$env:TFSTATE_RG" -backend-config="storage_account_name=$env:TFSTATE_SA" -backend-config="container_name=$env:TFSTATE_CONTAINER" -backend-config="key=$env:TFSTATE_KEY"
+                        & terraform apply -auto-approve -input=false -backend-config="resource_group_name=$env:TFSTATE_RG" -backend-config="storage_account_name=$env:TFSTATE_SA" -backend-config="container_name=$env:TFSTATE_CONTAINER" -backend-config="key=$env:TFSTATE_KEY"
                     }
                     finally {
                         Write-Host "==> STEP 3: Enterprise Cleanup - Closing Firewall Hole"
