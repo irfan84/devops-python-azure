@@ -101,16 +101,16 @@ stages:
                         Write-Host "==> Whitelisting Agent IP: $currentIp"
                         az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentIp"
 
-                        # Robust Retry Logic for 403 Forbidden/Firewall Propagation
+                        # Robust Retry Logic
                         $maxRetries = 3
                         $retryCount = 0
                         $success = $false
 
                         while (-not $success -and $retryCount -lt $maxRetries) {
                             $retryCount++
-                            Write-Host "==> Attempt $retryCount of $maxRetries: Terraform Apply"
+                            # FIXED LINE BELOW: Used ${} to delimit variable from colon
+                            Write-Host "==> Attempt $retryCount of ${maxRetries}: Terraform Apply"
                             
-                            # Wait increases with each attempt (60s, then 90s, then 120s)
                             $waitTime = 30 + ($retryCount * 30)
                             Write-Host "Waiting $waitTime seconds for firewall propagation..."
                             Start-Sleep -Seconds $waitTime
@@ -126,7 +126,7 @@ stages:
                         }
 
                         if (-not $success) {
-                            throw "Terraform Apply failed after $maxRetries attempts. Check Key Vault RBAC or Firewall settings."
+                            throw "Terraform Apply failed after $maxRetries attempts."
                         }
                     }
                     finally {
