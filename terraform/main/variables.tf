@@ -10,7 +10,7 @@ variable "environment" {
 
 variable "office_ip" {
   type        = string
-  description = "The static IP from Azure DevOps Library"
+  default     = 103.241.37.179
 }
 
 variable "location" {
