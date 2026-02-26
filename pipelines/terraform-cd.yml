@@ -115,7 +115,7 @@ stages:
                             Write-Host "Waiting $waitTime seconds for firewall propagation..."
                             Start-Sleep -Seconds $waitTime
 
-                            & terraform apply -auto-approve -input=false -var="use_oidc=true" -compact-warnings
+                            & terraform apply -auto-approve -input=false -compact-warnings
 
                             if ($LASTEXITCODE -eq 0) {
                                 $success = $true
