@@ -128,12 +128,17 @@ stages:
                       -backend-config="use_azuread_auth=true"
 
                     # --- MODIFIED SECTION START ---
-                    Write-Host "==> STEP 1: Targeting Key Vault to open Firewall"
-                    # Use the full address: resource_type.resource_name
-                    & terraform apply -target="azurerm_key_vault.kv" -input=false -auto-approve -var="use_oidc=true"
+                    Write-Host "==> STEP 1: Forcing Firewall Hole via Azure CLI"
+                    # Get the Agent IP
+                    $agentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
+                    Write-Host "Detected Agent IP: $agentIp"
 
-                    Write-Host "==> Waiting 30s for Azure DNS/Firewall propagation..."
-                    Start-Sleep -Seconds 30
+                    # Add the IP directly via CLI using the variable
+                    # Note: Ensure KV_NAME is defined in your variables or env block
+                    az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$agentIp"
+
+                    Write-Host "==> Waiting 45s for Azure Firewall propagation in New Zealand North..."
+                    Start-Sleep -Seconds 45
 
                     Write-Host "==> STEP 2: Terraform apply full saved plan"
                     & terraform apply -input=false -auto-approve ".\tfplan"
@@ -147,5 +152,6 @@ stages:
               TFSTATE_SA: $(TFSTATE_SA)
               TFSTATE_CONTAINER: $(TFSTATE_CONTAINER)
               TFSTATE_KEY: $(TFSTATE_KEY)
+              KV_NAME: $(KV_NAME)
               CI_COMMIT_ID: $(resources.pipelines.tfci.sourceVersion)
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
