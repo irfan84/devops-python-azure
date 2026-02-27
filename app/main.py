@@ -5,9 +5,12 @@ app = Flask(__name__)
 
 try:
     from azure.monitor.opentelemetry import configure_azure_monitor
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor
+
     configure_azure_monitor()
+    FlaskInstrumentor().instrument_app(app)
+
 except Exception as e:
-    # Telemetry should never crash the app/tests
     print(f"Telemetry init skipped: {e}")
 
 @app.get("/")
