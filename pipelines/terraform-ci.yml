@@ -77,12 +77,12 @@ stages:
           $currentAgentIp = $null
 
           try {
-              # 1. Smart Bridge: Silent existence check
-              Write-Host "==> Checking if Key Vault exists..."
+              # 1. Smart Bridge: Scoped to Subscription
+              Write-Host "==> Checking if Key Vault '$env:KV_NAME' exists in Sub: $env:TF_SUBSCRIPTION_ID"
               $kvExists = $null
               try {
-                  # We use --only-show-errors and 2>$null to prevent the Task from seeing a 'Failure'
-                  $kvExists = $(az keyvault show --name "$env:KV_NAME" --resource-group "$env:TF_STATE_RG" --query "id" -o tsv --only-show-errors) 2>$null
+                  # Explicitly targeting subscription ensures we find the vault even if the CLI context defaults elsewhere
+                  $kvExists = $(az keyvault show --name "$env:KV_NAME" --resource-group "$env:TF_STATE_RG" --subscription "$env:TF_SUBSCRIPTION_ID" --query "id" -o tsv --only-show-errors) 2>$null
               } catch {
                   $kvExists = $null
               }
@@ -90,12 +90,12 @@ stages:
               if ($null -ne $kvExists -and $kvExists -ne "") {
                   $currentAgentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
                   Write-Host "==> Key Vault Detected. Bridging Live Runner IP: $currentAgentIp"
-                  az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentAgentIp"
+                  az keyvault network-rule add --name "$env:KV_NAME" --resource-group "$env:TF_STATE_RG" --ip-address "$currentAgentIp" --subscription "$env:TF_SUBSCRIPTION_ID"
                   
                   Write-Host "==> Waiting 45s for Azure Network Propagation..."
                   Start-Sleep -Seconds 45
               } else {
-                  Write-Host "==> Key Vault '$env:KV_NAME' not found. Skipping bridge logic (Initial Run)."
+                  Write-Host "==> Key Vault not found. Skipping bridge (Initial Setup)."
               }
 
               # 2. OIDC Authentication Setup
@@ -127,7 +127,7 @@ stages:
               # 5. Cleanup
               if ($null -ne $currentAgentIp) {
                   Write-Host "==> Cleanup: Removing Live Runner firewall rule: $currentAgentIp"
-                  az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentAgentIp"
+                  az keyvault network-rule remove --name "$env:KV_NAME" --resource-group "$env:TF_STATE_RG" --ip-address "$currentAgentIp" --subscription "$env:TF_SUBSCRIPTION_ID"
               }
               Pop-Location
           }
