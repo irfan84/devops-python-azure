@@ -59,10 +59,17 @@ stages:
               inlineScript: |
                 $ErrorActionPreference = "Stop"
 
-                # 1. Bridge the Live Runner IP
-                $currentRunnerIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
-                Write-Host "==> Bridging Live Runner IP: $currentRunnerIp"
-                az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentRunnerIp"
+                # 1. Smart Bridge: Detect Key Vault and Runner IP
+                $currentRunnerIp = $null
+                $kvExists = az keyvault show --name "$env:KV_NAME" --resource-group "$env:TFSTATE_RG" --query "id" -o tsv 2>$null
+
+                if ($null -ne $kvExists) {
+                    $currentRunnerIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
+                    Write-Host "==> Key Vault Detected. Bridging Live Runner IP: $currentRunnerIp"
+                    az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentRunnerIp"
+                } else {
+                    Write-Host "==> Key Vault '$env:KV_NAME' not found. Skipping bridge (Initial Setup)."
+                }
 
                 # 2. OIDC Env Setup
                 $env:ARM_USE_OIDC         = "true"
@@ -114,7 +121,7 @@ stages:
                     }
                 }
                 finally {
-                    # 4. Mandatory Cleanup
+                    # 4. Mandatory Cleanup (Only if bridge was added)
                     if ($null -ne $currentRunnerIp) {
                         Write-Host "==> Cleanup: Removing runner rule: $currentRunnerIp"
                         az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentRunnerIp"
