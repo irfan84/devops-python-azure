@@ -60,7 +60,7 @@ stages:
           checkov -d "$(TF_ROOT)" --quiet
 
     - task: AzureCLI@2
-      displayName: "OIDC Login + terraform init/validate/plan"
+      displayName: "OIDC Login + Dual-IP Bridge + Plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
         scriptType: ps
@@ -73,17 +73,26 @@ stages:
           $tfDir     = Join-Path $baseDir "$(TF_ROOT)"
           $planPath  = Join-Path $tfDir "tfplan"
 
-          Write-Host "==> Resetting local Terraform state"
-          $dotTerraform = Join-Path $tfDir ".terraform"
-          if (Test-Path $dotTerraform) {
-              $timestamp = Get-Date -Format "yyyyMMddHHmmss"
-              $oldDir = "$($dotTerraform)_old_$timestamp"
-              Rename-Item -Path $dotTerraform -NewName $oldDir -ErrorAction SilentlyContinue
-              Remove-Item -Path $oldDir -Recurse -Force -ErrorAction SilentlyContinue
-          }
-
           Push-Location $tfDir
+          $currentAgentIp = $null
+
           try {
+              # 1. Dual-IP Bridge Injection
+              # Get Dynamic Live Runner IP
+              $currentAgentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
+              Write-Host "==> Bridging Live Runner IP: $currentAgentIp"
+              az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentAgentIp"
+
+              # Add Secondary Agent IP (from Library)
+              if (-not [string]::IsNullOrWhiteSpace($env:TF_VAR_AgentIP)) {
+                  Write-Host "==> Bridging Secondary Agent IP (TF_VAR_AgentIP): $env:TF_VAR_AgentIP"
+                  az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$env:TF_VAR_AgentIP"
+              }
+
+              Write-Host "==> Waiting 45s for Azure Network Propagation..."
+              Start-Sleep -Seconds 45
+
+              # 2. OIDC Authentication Setup
               Write-Host "==> OIDC Authentication Setup"
               $env:ARM_CLIENT_ID       = $env:servicePrincipalId
               $env:ARM_TENANT_ID       = $env:tenantId
@@ -91,6 +100,14 @@ stages:
               $env:ARM_SUBSCRIPTION_ID = $env:TF_SUBSCRIPTION_ID
               $env:ARM_USE_OIDC        = "true"
 
+              # 3. Reset Local State
+              Write-Host "==> Resetting local Terraform state"
+              $dotTerraform = Join-Path $tfDir ".terraform"
+              if (Test-Path $dotTerraform) {
+                  Remove-Item -Path $dotTerraform -Recurse -Force -ErrorAction SilentlyContinue
+              }
+
+              # 4. Terraform Workflow
               Write-Host "==> Terraform init"
               terraform init -reconfigure -input=false -force-copy `
                 -backend-config="resource_group_name=$env:TF_STATE_RG" `
@@ -111,12 +128,17 @@ stages:
               Write-Host "==> Terraform plan"
               terraform plan -out="$planPath" -input=false
 
-              if (!(Test-Path "$planPath")) { throw "CRITICAL: tfplan file not found! Check init logs." }
+              if (!(Test-Path "$planPath")) { throw "CRITICAL: tfplan file not found!" }
 
               Write-Host "==> Terraform show"
               terraform show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
           }
           finally {
+              # 5. Cleanup: Remove the temporary Live Runner IP
+              if ($null -ne $currentAgentIp) {
+                  Write-Host "==> Cleanup: Removing Live Runner firewall rule: $currentAgentIp"
+                  az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentAgentIp"
+              }
               Pop-Location
           }
       env:
@@ -125,6 +147,8 @@ stages:
         TF_STATE_SA: $(TFSTATE_SA)
         TF_STATE_CONTAINER: $(TFSTATE_CONTAINER)
         TF_STATE_KEY: $(TFSTATE_KEY)
+        KV_NAME: $(KV_NAME)
+        TF_VAR_AgentIP: $(TF_VAR_AgentIP)
 
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
       displayName: "Publish binary tfplan"
