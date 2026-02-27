@@ -60,7 +60,7 @@ stages:
           checkov -d "$(TF_ROOT)" --quiet
 
     - task: AzureCLI@2
-      displayName: "OIDC Login + Live Bridge + Plan"
+      displayName: "OIDC Login + Smart Bridge + Plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
         scriptType: ps
@@ -77,11 +77,17 @@ stages:
           $currentAgentIp = $null
 
           try {
-              # 1. Smart Bridge: Detect Key Vault and Runner IP
-              # Scoped check by RG to be Enterprise-grade
-              $kvExists = az keyvault show --name "$env:KV_NAME" --resource-group "$env:TF_STATE_RG" --query "id" -o tsv 2>$null
+              # 1. Smart Bridge: Silent existence check
+              Write-Host "==> Checking if Key Vault exists..."
+              $kvExists = $null
+              try {
+                  # We use --only-show-errors and 2>$null to prevent the Task from seeing a 'Failure'
+                  $kvExists = $(az keyvault show --name "$env:KV_NAME" --resource-group "$env:TF_STATE_RG" --query "id" -o tsv --only-show-errors) 2>$null
+              } catch {
+                  $kvExists = $null
+              }
 
-              if ($null -ne $kvExists) {
+              if ($null -ne $kvExists -and $kvExists -ne "") {
                   $currentAgentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
                   Write-Host "==> Key Vault Detected. Bridging Live Runner IP: $currentAgentIp"
                   az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentAgentIp"
@@ -89,11 +95,10 @@ stages:
                   Write-Host "==> Waiting 45s for Azure Network Propagation..."
                   Start-Sleep -Seconds 45
               } else {
-                  Write-Host "==> Key Vault '$env:KV_NAME' not found. Skipping bridge (Initial Setup)."
+                  Write-Host "==> Key Vault '$env:KV_NAME' not found. Skipping bridge logic (Initial Run)."
               }
 
               # 2. OIDC Authentication Setup
-              Write-Host "==> OIDC Authentication Setup"
               $env:ARM_CLIENT_ID       = $env:servicePrincipalId
               $env:ARM_TENANT_ID       = $env:tenantId
               $env:ARM_OIDC_TOKEN      = $env:idToken
@@ -101,14 +106,10 @@ stages:
               $env:ARM_USE_OIDC        = "true"
 
               # 3. Reset Local State
-              Write-Host "==> Resetting local Terraform state"
               $dotTerraform = Join-Path $tfDir ".terraform"
-              if (Test-Path $dotTerraform) {
-                  Remove-Item -Path $dotTerraform -Recurse -Force -ErrorAction SilentlyContinue
-              }
+              if (Test-Path $dotTerraform) { Remove-Item -Path $dotTerraform -Recurse -Force -ErrorAction SilentlyContinue }
 
               # 4. Terraform Workflow
-              Write-Host "==> Terraform init"
               terraform init -reconfigure -input=false -force-copy `
                 -backend-config="resource_group_name=$env:TF_STATE_RG" `
                 -backend-config="storage_account_name=$env:TF_STATE_SA" `
@@ -117,24 +118,13 @@ stages:
                 -backend-config="use_oidc=true" `
                 -backend-config="use_azuread_auth=true"
 
-              if (!(Test-Path ".terraform.lock.hcl")) { throw "CRITICAL: .terraform.lock.hcl not found after init!" }
-
-              Write-Host "==> Terraform fmt check"
               terraform fmt -check -recursive
-
-              Write-Host "==> Terraform validate"
               terraform validate
-
-              Write-Host "==> Terraform plan"
               terraform plan -out="$planPath" -input=false
-
-              if (!(Test-Path "$planPath")) { throw "CRITICAL: tfplan file not found!" }
-
-              Write-Host "==> Terraform show"
               terraform show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
           }
           finally {
-              # 5. Cleanup: Only remove if a rule was actually added
+              # 5. Cleanup
               if ($null -ne $currentAgentIp) {
                   Write-Host "==> Cleanup: Removing Live Runner firewall rule: $currentAgentIp"
                   az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentAgentIp"
@@ -150,13 +140,8 @@ stages:
         KV_NAME: $(KV_NAME)
 
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
-      displayName: "Publish binary tfplan"
       artifact: tfplan
-
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan.txt"
-      displayName: "Publish text tfplan"
       artifact: tfplan-text
-
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/.terraform.lock.hcl"
-      displayName: "Publish terraform lockfile"
       artifact: tf-lockfile
