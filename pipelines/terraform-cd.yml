@@ -27,9 +27,7 @@ stages:
     displayName: "Apply tfplan"
     pool:
       name: self-hosted-dev
-
-    environment: devopspy-prod
-
+    environment: devopspy-prod # Triggers manual approval if configured in ADO
     strategy:
       runOnce:
         deploy:
@@ -52,7 +50,7 @@ stages:
               terraformVersion: "$(TF_VERSION)"
 
           - task: AzureCLI@2
-            displayName: "OIDC Login + Terraform Init + Robust Apply"
+            displayName: "Enterprise Deployment: Init + Plan-Based Apply"
             inputs:
               azureSubscription: "sc-devopspy-terraform-oidc"
               addSpnToEnvironment: true
@@ -68,23 +66,21 @@ stages:
                 $env:ARM_TENANT_ID        = "$(ARM_TENANT_ID)"
                 $env:ARM_SUBSCRIPTION_ID  = "$(ARM_SUBSCRIPTION_ID)"
 
-                # 2. Resolve CI commit
+                # 2. Sync to CI Commit
                 $ciCommit = $env:CI_COMMIT_ID
-                if ([string]::IsNullOrWhiteSpace($ciCommit)) {
-                    $runId = $env:RESOURCES_PIPELINES_TFCI_RUNID
-                    $token = $env:SYSTEM_ACCESSTOKEN
-                    $url = "$(System.CollectionUri)$(System.TeamProject)/_apis/pipelines/$(resources.pipelines.tfci.pipelineID)/runs/$runId?api-version=7.1-preview.1"
-                    $run = Invoke-RestMethod -Uri $url -Headers @{Authorization="Bearer $token"}
-                    $ciCommit = $run.resources.repositories.self.version
-                }
                 git fetch --all; git checkout $ciCommit
 
                 $tfDir = Join-Path "$(Build.SourcesDirectory)" "$(TF_ROOT)"
                 Push-Location $tfDir
+                
                 try {
+                    # Cleanup and prep lockfile
                     if (Test-Path ".terraform") { Remove-Item -Recurse -Force ".terraform" }
                     Copy-Item "$(Pipeline.Workspace)/tfci/tf-lockfile/.terraform.lock.hcl" ".\.terraform.lock.hcl" -Force
-                    Copy-Item "$(Pipeline.Workspace)/tfci/tfplan/tfplan" ".\tfplan" -Force
+                    
+                    # IMPORTANT: Use the plan from CI
+                    $planPath = "$(Pipeline.Workspace)/tfci/tfplan/tfplan"
+                    if (-not (Test-Path $planPath)) { throw "Critical Error: tfplan not found at $planPath" }
 
                     Write-Host "==> Initializing Terraform"
                     terraform init -reconfigure -input=false -lockfile=readonly `
@@ -95,48 +91,44 @@ stages:
                       -backend-config="use_oidc=true" `
                       -backend-config="use_azuread_auth=true"
 
-                    $currentIp = $null
-                    try {
-                        $currentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
-                        Write-Host "==> Whitelisting Agent IP: $currentIp"
-                        az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentIp"
+                    # 3. Network Rule Injection
+                    # Since you added the IP to TF_VAR_office_ip, this az cli step is 
+                    # a safety 'bridge' to ensure the agent has instant access.
+                    $currentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
+                    Write-Host "==> Bridging Agent IP: $currentIp"
+                    az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentIp"
 
-                        # Robust Retry Logic
-                        $maxRetries = 3
-                        $retryCount = 0
-                        $success = $false
-
-                        while (-not $success -and $retryCount -lt $maxRetries) {
-                            $retryCount++
-                            # FIXED LINE BELOW: Used ${} to delimit variable from colon
-                            Write-Host "==> Attempt $retryCount of ${maxRetries}: Terraform Apply"
-                            
-                            $waitTime = 30 + ($retryCount * 30)
-                            Write-Host "Waiting $waitTime seconds for firewall propagation..."
-                            Start-Sleep -Seconds $waitTime
-
-                            & terraform apply -auto-approve -input=false -compact-warnings
-
-                            if ($LASTEXITCODE -eq 0) {
-                                $success = $true
-                                Write-Host "==> Success! Terraform applied."
+                    # 4. Enterprise Apply (Deterministic)
+                    # We only allow 1 retry specifically for firewall propagation.
+                    $success = $false
+                    $attempt = 1
+                    
+                    while (-not $success -and $attempt -le 2) {
+                        Write-Host "==> Apply Attempt $attempt: Waiting 45s for Azure Network Propagation..."
+                        Start-Sleep -Seconds 45
+                        
+                        # We apply the PLAN FILE, not the directory. This is standard for Enterprise.
+                        terraform apply -input=false -compact-warnings -auto-approve $planPath
+                        
+                        if ($LASTEXITCODE -eq 0) {
+                            $success = $true
+                            Write-Host "Successfully applied CI plan."
+                        } else {
+                            if ($attempt -eq 1) {
+                                Write-Warning "First attempt failed (likely 403 propagation). Retrying once..."
+                                $attempt++
                             } else {
-                                Write-Warning "Terraform failed (Exit Code $LASTEXITCODE). Could be firewall propagation. Retrying..."
+                                throw "Terraform Apply failed after propagation retry. Check Key Vault ACLs."
                             }
-                        }
-
-                        if (-not $success) {
-                            throw "Terraform Apply failed after $maxRetries attempts."
-                        }
-                    }
-                    finally {
-                        if ($null -ne $currentIp) {
-                            Write-Host "==> Cleanup: Removing Firewall Rule"
-                            az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentIp"
                         }
                     }
                 }
                 finally {
+                    # Always cleanup the bridge rule
+                    if ($null -ne $currentIp) {
+                        Write-Host "==> Cleanup: Removing temporary firewall rule"
+                        az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentIp"
+                    }
                     Pop-Location
                 }
             env:
