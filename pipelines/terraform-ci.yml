@@ -77,12 +77,11 @@ stages:
           $currentAgentIp = $null
 
           try {
-              # 1. Smart Bridge: Scoped to Subscription
+              # 1. Smart Bridge: Explicit Subscription and RG check
               Write-Host "==> Checking if Key Vault '$env:KV_NAME' exists in Sub: $env:TF_SUBSCRIPTION_ID"
               $kvExists = $null
               try {
-                  # Explicitly targeting subscription ensures we find the vault even if the CLI context defaults elsewhere
-                  $kvExists = $(az keyvault show --name "$env:KV_NAME" --resource-group "$env:TF_STATE_RG" --subscription "$env:TF_SUBSCRIPTION_ID" --query "id" -o tsv --only-show-errors) 2>$null
+                  $kvExists = $(az keyvault show --name "$env:KV_NAME" --resource-group "$env:TFSTATE_RG" --subscription "$env:TF_SUBSCRIPTION_ID" --query "id" -o tsv --only-show-errors) 2>$null
               } catch {
                   $kvExists = $null
               }
@@ -90,12 +89,12 @@ stages:
               if ($null -ne $kvExists -and $kvExists -ne "") {
                   $currentAgentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
                   Write-Host "==> Key Vault Detected. Bridging Live Runner IP: $currentAgentIp"
-                  az keyvault network-rule add --name "$env:KV_NAME" --resource-group "$env:TF_STATE_RG" --ip-address "$currentAgentIp" --subscription "$env:TF_SUBSCRIPTION_ID"
+                  az keyvault network-rule add --name "$env:KV_NAME" --resource-group "$env:TFSTATE_RG" --ip-address "$currentAgentIp" --subscription "$env:TF_SUBSCRIPTION_ID"
                   
                   Write-Host "==> Waiting 45s for Azure Network Propagation..."
                   Start-Sleep -Seconds 45
               } else {
-                  Write-Host "==> Key Vault not found. Skipping bridge (Initial Setup)."
+                  Write-Host "==> Key Vault not found or unreachable. Skipping bridge logic (Initial Setup)."
               }
 
               # 2. OIDC Authentication Setup
@@ -111,10 +110,10 @@ stages:
 
               # 4. Terraform Workflow
               terraform init -reconfigure -input=false -force-copy `
-                -backend-config="resource_group_name=$env:TF_STATE_RG" `
-                -backend-config="storage_account_name=$env:TF_STATE_SA" `
-                -backend-config="container_name=$env:TF_STATE_CONTAINER" `
-                -backend-config="key=$env:TF_STATE_KEY" `
+                -backend-config="resource_group_name=$env:TFSTATE_RG" `
+                -backend-config="storage_account_name=$env:TFSTATE_SA" `
+                -backend-config="container_name=$env:TFSTATE_CONTAINER" `
+                -backend-config="key=$env:TFSTATE_KEY" `
                 -backend-config="use_oidc=true" `
                 -backend-config="use_azuread_auth=true"
 
@@ -127,16 +126,16 @@ stages:
               # 5. Cleanup
               if ($null -ne $currentAgentIp) {
                   Write-Host "==> Cleanup: Removing Live Runner firewall rule: $currentAgentIp"
-                  az keyvault network-rule remove --name "$env:KV_NAME" --resource-group "$env:TF_STATE_RG" --ip-address "$currentAgentIp" --subscription "$env:TF_SUBSCRIPTION_ID"
+                  az keyvault network-rule remove --name "$env:KV_NAME" --resource-group "$env:TFSTATE_RG" --ip-address "$currentAgentIp" --subscription "$env:TF_SUBSCRIPTION_ID"
               }
               Pop-Location
           }
       env:
         TF_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
-        TF_STATE_RG: $(TFSTATE_RG)
-        TF_STATE_SA: $(TFSTATE_SA)
-        TF_STATE_CONTAINER: $(TFSTATE_CONTAINER)
-        TF_STATE_KEY: $(TFSTATE_KEY)
+        TFSTATE_RG: $(TFSTATE_RG)
+        TFSTATE_SA: $(TFSTATE_SA)
+        TFSTATE_CONTAINER: $(TFSTATE_CONTAINER)
+        TFSTATE_KEY: $(TFSTATE_KEY)
         KV_NAME: $(KV_NAME)
 
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
