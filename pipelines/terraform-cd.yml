@@ -54,11 +54,11 @@ stages:
               inlineScript: |
                 $ErrorActionPreference = "Stop"
 
-                # 1. Smart Bridge: Silent existence check
+                # 1. Smart Bridge: Scoped to Subscription
                 $currentRunnerIp = $null
                 $kvExists = $null
                 try {
-                    $kvExists = $(az keyvault show --name "$env:KV_NAME" --resource-group "$env:TFSTATE_RG" --query "id" -o tsv --only-show-errors) 2>$null
+                    $kvExists = $(az keyvault show --name "$env:KV_NAME" --resource-group "$env:TFSTATE_RG" --subscription "$env:ARM_SUBSCRIPTION_ID" --query "id" -o tsv --only-show-errors) 2>$null
                 } catch {
                     $kvExists = $null
                 }
@@ -66,13 +66,12 @@ stages:
                 if ($null -ne $kvExists -and $kvExists -ne "") {
                     $currentRunnerIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
                     Write-Host "==> Key Vault Detected. Bridging Live Runner IP: $currentRunnerIp"
-                    az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentRunnerIp"
+                    az keyvault network-rule add --name "$env:KV_NAME" --resource-group "$env:TFSTATE_RG" --ip-address "$currentRunnerIp" --subscription "$env:ARM_SUBSCRIPTION_ID"
                 } else {
-                    Write-Host "==> Key Vault not found. Proceeding without bridge."
+                    Write-Host "==> Key Vault not found. Proceeding with Initial Deployment logic."
                 }
 
                 # 2. OIDC Env Setup
-                $env:idToken = $env:idToken # Ensure task context
                 $env:ARM_USE_OIDC         = "true"
                 $env:ARM_OIDC_TOKEN       = $env:idToken
                 $env:ARM_CLIENT_ID        = "$(ARM_CLIENT_ID)"
@@ -114,7 +113,7 @@ stages:
                 finally {
                     if ($null -ne $currentRunnerIp) {
                         Write-Host "==> Cleanup: Removing runner rule: $currentRunnerIp"
-                        az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentRunnerIp"
+                        az keyvault network-rule remove --name "$env:KV_NAME" --resource-group "$env:TFSTATE_RG" --ip-address "$currentRunnerIp" --subscription "$env:ARM_SUBSCRIPTION_ID"
                     }
                     Pop-Location
                 }
