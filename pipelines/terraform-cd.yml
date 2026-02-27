@@ -34,23 +34,18 @@ stages:
           steps:
           - checkout: self
             clean: true
-            fetchDepth: 0
 
           - download: tfci
-            displayName: "Download artifacts"
             artifact: tfplan
-
           - download: tfci
-            displayName: "Download lockfile"
             artifact: tf-lockfile
 
           - task: TerraformInstaller@1
-            displayName: "Install Terraform $(TF_VERSION)"
             inputs:
               terraformVersion: "$(TF_VERSION)"
 
           - task: AzureCLI@2
-            displayName: "Enterprise Deployment: Live Bridge + Apply"
+            displayName: "Enterprise Deployment: Smart Bridge + Apply"
             inputs:
               azureSubscription: "sc-devopspy-terraform-oidc"
               addSpnToEnvironment: true
@@ -59,19 +54,25 @@ stages:
               inlineScript: |
                 $ErrorActionPreference = "Stop"
 
-                # 1. Smart Bridge: Detect Key Vault and Runner IP
+                # 1. Smart Bridge: Silent existence check
                 $currentRunnerIp = $null
-                $kvExists = az keyvault show --name "$env:KV_NAME" --resource-group "$env:TFSTATE_RG" --query "id" -o tsv 2>$null
+                $kvExists = $null
+                try {
+                    $kvExists = $(az keyvault show --name "$env:KV_NAME" --resource-group "$env:TFSTATE_RG" --query "id" -o tsv --only-show-errors) 2>$null
+                } catch {
+                    $kvExists = $null
+                }
 
-                if ($null -ne $kvExists) {
+                if ($null -ne $kvExists -and $kvExists -ne "") {
                     $currentRunnerIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
                     Write-Host "==> Key Vault Detected. Bridging Live Runner IP: $currentRunnerIp"
                     az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentRunnerIp"
                 } else {
-                    Write-Host "==> Key Vault '$env:KV_NAME' not found. Skipping bridge (Initial Setup)."
+                    Write-Host "==> Key Vault not found. Proceeding without bridge."
                 }
 
                 # 2. OIDC Env Setup
+                $env:idToken = $env:idToken # Ensure task context
                 $env:ARM_USE_OIDC         = "true"
                 $env:ARM_OIDC_TOKEN       = $env:idToken
                 $env:ARM_CLIENT_ID        = "$(ARM_CLIENT_ID)"
@@ -82,14 +83,11 @@ stages:
                 Push-Location $tfDir
                 
                 try {
-                    # Environment Prep
                     if (Test-Path ".terraform") { Remove-Item -Recurse -Force ".terraform" }
                     Copy-Item "$(Pipeline.Workspace)/tfci/tf-lockfile/.terraform.lock.hcl" ".\.terraform.lock.hcl" -Force
                     
                     $planPath = "$(Pipeline.Workspace)/tfci/tfplan/tfplan"
-                    if (-not (Test-Path $planPath)) { throw "Critical Error: tfplan not found" }
-
-                    Write-Host "==> Initializing Terraform"
+                    
                     terraform init -reconfigure -input=false -lockfile=readonly `
                       -backend-config="resource_group_name=$env:TFSTATE_RG" `
                       -backend-config="storage_account_name=$env:TFSTATE_SA" `
@@ -104,24 +102,16 @@ stages:
                     while (-not $success -and $attempt -le 2) {
                         Write-Host "==> Apply Attempt ${attempt}: Waiting 45s for Propagation..."
                         Start-Sleep -Seconds 45
-                        
                         terraform apply -input=false -compact-warnings -auto-approve $planPath
                         
                         if ($LASTEXITCODE -eq 0) {
                             $success = $true
-                            Write-Host "Successfully applied."
                         } else {
-                            if ($attempt -eq 1) {
-                                Write-Warning "Attempt 1 failed. Retrying..."
-                                $attempt++
-                            } else {
-                                throw "Terraform Apply failed."
-                            }
+                            if ($attempt -eq 1) { $attempt++ } else { throw "Apply failed." }
                         }
                     }
                 }
                 finally {
-                    # 4. Mandatory Cleanup (Only if bridge was added)
                     if ($null -ne $currentRunnerIp) {
                         Write-Host "==> Cleanup: Removing runner rule: $currentRunnerIp"
                         az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentRunnerIp"
