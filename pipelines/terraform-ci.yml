@@ -60,7 +60,7 @@ stages:
           checkov -d "$(TF_ROOT)" --quiet
 
     - task: AzureCLI@2
-      displayName: "OIDC Login + Dual-IP Bridge + Plan"
+      displayName: "OIDC Login + Live Bridge + Plan"
       inputs:
         azureSubscription: "sc-devopspy-terraform-oidc"
         scriptType: ps
@@ -77,20 +77,20 @@ stages:
           $currentAgentIp = $null
 
           try {
-              # 1. Dual-IP Bridge Injection
-              # Get Dynamic Live Runner IP
-              $currentAgentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
-              Write-Host "==> Bridging Live Runner IP: $currentAgentIp"
-              az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentAgentIp"
+              # 1. Smart Bridge: Detect Key Vault and Runner IP
+              # Scoped check by RG to be Enterprise-grade
+              $kvExists = az keyvault show --name "$env:KV_NAME" --resource-group "$env:TF_STATE_RG" --query "id" -o tsv 2>$null
 
-              # Add Secondary Agent IP (from Library)
-              if (-not [string]::IsNullOrWhiteSpace($env:TF_VAR_AgentIP)) {
-                  Write-Host "==> Bridging Secondary Agent IP (TF_VAR_AgentIP): $env:TF_VAR_AgentIP"
-                  az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$env:TF_VAR_AgentIP"
+              if ($null -ne $kvExists) {
+                  $currentAgentIp = (Invoke-RestMethod -Uri "https://ifconfig.me/ip").Trim()
+                  Write-Host "==> Key Vault Detected. Bridging Live Runner IP: $currentAgentIp"
+                  az keyvault network-rule add --name "$env:KV_NAME" --ip-address "$currentAgentIp"
+                  
+                  Write-Host "==> Waiting 45s for Azure Network Propagation..."
+                  Start-Sleep -Seconds 45
+              } else {
+                  Write-Host "==> Key Vault '$env:KV_NAME' not found. Skipping bridge (Initial Setup)."
               }
-
-              Write-Host "==> Waiting 45s for Azure Network Propagation..."
-              Start-Sleep -Seconds 45
 
               # 2. OIDC Authentication Setup
               Write-Host "==> OIDC Authentication Setup"
@@ -134,7 +134,7 @@ stages:
               terraform show -no-color "$planPath" | Out-File -FilePath "$planPath.txt" -Encoding utf8
           }
           finally {
-              # 5. Cleanup: Remove the temporary Live Runner IP
+              # 5. Cleanup: Only remove if a rule was actually added
               if ($null -ne $currentAgentIp) {
                   Write-Host "==> Cleanup: Removing Live Runner firewall rule: $currentAgentIp"
                   az keyvault network-rule remove --name "$env:KV_NAME" --ip-address "$currentAgentIp"
@@ -148,7 +148,6 @@ stages:
         TF_STATE_CONTAINER: $(TFSTATE_CONTAINER)
         TF_STATE_KEY: $(TFSTATE_KEY)
         KV_NAME: $(KV_NAME)
-        TF_VAR_AgentIP: $(TF_VAR_AgentIP)
 
     - publish: "$(Build.SourcesDirectory)/$(TF_ROOT)/tfplan"
       displayName: "Publish binary tfplan"
