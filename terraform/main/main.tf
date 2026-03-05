@@ -34,7 +34,7 @@ resource "azurerm_service_plan" "plan" {
   location            = azurerm_resource_group.app.location
   resource_group_name = azurerm_resource_group.app.name
   os_type             = "Linux"
-  sku_name            = "S1"
+  sku_name            = "F1"
 }
 
 # --------------------
@@ -81,7 +81,7 @@ resource "azurerm_linux_web_app" "app" {
   }
 
   site_config {
-    always_on           = true
+    always_on           = false
     minimum_tls_version = "1.2"
     ftps_state          = "Disabled"
     health_check_path   = "/health"
@@ -119,13 +119,14 @@ resource "azurerm_linux_web_app" "app" {
 # Staging Slot
 # --------------------
 resource "azurerm_linux_web_app_slot" "staging" {
+  count          = 0
   name           = "staging"
   app_service_id = azurerm_linux_web_app.app.id
 
   https_only = true
 
   site_config {
-    always_on           = true
+    always_on           = false
     minimum_tls_version = "1.2"
     ftps_state          = "Disabled"
     health_check_path   = "/health"
