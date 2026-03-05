@@ -27,6 +27,7 @@ resource "random_string" "suffix" {
 # App Service Plan
 # --------------------
 resource "azurerm_service_plan" "plan" {
+# checkov:skip=CKV_AZURE_214:Always on is not supported in F1 Free tier
 # checkov:skip=CKV_AZURE_212: Minimum instance count not required for portfolio environment
 # checkov:skip=CKV_AZURE_225: Zone redundancy requires Premium SKU (cost optimization decision)
   
