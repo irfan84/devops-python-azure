@@ -27,6 +27,7 @@ resource "random_string" "suffix" {
 # App Service Plan
 # --------------------
 resource "azurerm_service_plan" "plan" {
+# checkov:skip=CKV_AZURE_211: Using F1 Free tier for cost optimization in this environment
 # checkov:skip=CKV_AZURE_212: Minimum instance count not required for portfolio environment
 # checkov:skip=CKV_AZURE_225: Zone redundancy requires Premium SKU (cost optimization decision)
   
@@ -34,7 +35,7 @@ resource "azurerm_service_plan" "plan" {
   location            = azurerm_resource_group.app.location
   resource_group_name = azurerm_resource_group.app.name
   os_type             = "Linux"
-  sku_name            = "S1"
+  sku_name            = "F1"
 }
 
 # --------------------
@@ -63,6 +64,7 @@ resource "azurerm_application_insights" "ai" {
 # Linux Web App (Production)
 # --------------------
 resource "azurerm_linux_web_app" "app" {
+# checkov:skip=CKV_AZURE_214:Always on is not supported in F1 Free tier
 # checkov:skip=CKV_AZURE_13: App Service Authentication not required for public demo app
 # checkov:skip=CKV_AZURE_17: Client certificate enforcement not required for demo
 # checkov:skip=CKV_AZURE_222: Public network access required for public-facing portfolio app
@@ -81,7 +83,7 @@ resource "azurerm_linux_web_app" "app" {
   }
 
   site_config {
-    always_on           = true
+    always_on           = false
     minimum_tls_version = "1.2"
     ftps_state          = "Disabled"
     health_check_path   = "/health"
@@ -119,13 +121,14 @@ resource "azurerm_linux_web_app" "app" {
 # Staging Slot
 # --------------------
 resource "azurerm_linux_web_app_slot" "staging" {
+  count          = 0
   name           = "staging"
   app_service_id = azurerm_linux_web_app.app.id
 
   https_only = true
 
   site_config {
-    always_on           = true
+    always_on           = false
     minimum_tls_version = "1.2"
     ftps_state          = "Disabled"
     health_check_path   = "/health"
