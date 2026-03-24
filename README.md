@@ -21,7 +21,7 @@ Many NZ mid-market companies running Azure face the same problems: deployments t
 
 ## Architecture
 
-![Architecture diagram](docs/images/architecture.png)
+![Architecture diagram](docs/images/architecture.svg)
 
 The platform separates three concerns clearly:
 
